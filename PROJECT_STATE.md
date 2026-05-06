@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-## Fase actual: 4 - Simulación básica en Gazebo (COMPLETADA)
+## Fase actual: 6 - Control base móvil y brazo (COMPLETADA)
 
 ## Entorno
 - OS: Ubuntu 24.04 LTS (WSL2)
@@ -20,10 +20,14 @@
 - clearpath_config_live ✓
 - clearpath_viz ✓
 - ros-jazzy-clearpath-* (plataforma a200 / Husky) ✓
+- python3-evdev ✓ (lectura DualSense sin módulo joydev)
 
 ## Paquetes ROS 2 del proyecto
 - wind_tower_description (ament_cmake) ✓
 - wind_tower_bringup (ament_python) ✓
+  - simulation.launch.py — launcher principal
+  - dualsense_joy.py — driver mando PS5 vía evdev
+  - ps5_teleop.py — teleop brazo UR5e a 10 Hz
 - wind_tower_simulation (ament_cmake) ✓
 - wind_tower_control: pendiente
 - wind_tower_perception: pendiente
@@ -34,14 +38,18 @@
 - Ruta: ros2_ws/src/gz_ros2_control/
 - Bug: null-pointer dereference en ECM JointType/JointAxis components
 - Fix: null-checks con RCLCPP_WARN y continue en gz_system.cpp ~línea 296
-- Compilado con: colcon build --packages-select gz_ros2_control
 
 ## Simulación funcionando
-- Lanzar: ros2 launch clearpath_gz simulation.launch.py world:=warehouse rviz:=true
-- Entorno: ai-on + export PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+- Lanzar: ver LAUNCH_GUIDE.md
 - Controladores activos: platform_velocity_controller, joint_state_broadcaster, arm_0_joint_trajectory_controller
 - Joints cargados: 4 ruedas Husky + 6 joints UR5e
-- Sensores publicando: cámara (inspection_camera) + LiDAR (hokuyo)
+
+## Control con mando DualSense
+- Mando conectado vía usbipd (USB passthrough WSL2)
+- Lectura directa con evdev (sin módulo joydev, no disponible en kernel WSL2)
+- L1 + stick izq → Husky (gestionado por teleop_twist_joy_node de Clearpath)
+- L2 + stick der → brazo UR5e (gestionado por ps5_teleop nuestro, 10 Hz)
+- Topic joy: /robot/joy_teleop/joy
 
 ## Configuración del robot
 - Archivo: ros2_ws/src/wind_tower_bringup/config/robot.yaml
@@ -49,11 +57,11 @@
 - Robot: Husky a200 + UR5e + Hokuyo LiDAR + Intel RealSense D435
 
 ## Último paso completado
-- Fix gz_ros2_control WSL2 (segfault por nullptr en ECM components)
-- Simulación completa Husky + UR5e en Gazebo Harmonic ✓
-- Robot visible en RViz + Gazebo con todos los joints y controladores activos
+- Driver DualSense propio (evdev) para WSL2 sin joydev
+- Teleop brazo UR5e con timer 10 Hz (velocidad controlada)
+- Husky controlado por nodo Clearpath existente (L1 deadman)
+- Control completo Husky + brazo UR5e desde mando PS5
 
 ## Próximo paso
-- Fase 7: Añadir tramo de torre eólica (STL) + viradores al mundo Gazebo
-- Crear launch file propio en wind_tower_bringup
-- Añadir PYTHONPATH fix permanente al entorno
+- Fase 7: Añadir tramo de torre eólica (STL cilíndrico) + viradores al mundo Gazebo
+- Crear world SDF personalizado en wind_tower_simulation
