@@ -1,11 +1,11 @@
 # PROJECT STATE
 
-## Fase actual: 1 - Estructura de paquetes ROS 2 (COMPLETADA)
+## Fase actual: 4 - Simulación básica en Gazebo (COMPLETADA)
 
 ## Entorno
 - OS: Ubuntu 24.04 LTS (WSL2)
 - ROS 2: Jazzy
-- Gazebo: Harmonic (gz sim)
+- Gazebo: Harmonic (gz sim v8.10.0)
 - Workspace del proyecto: ~/ROS2_wind_tower_inspection/ros2_ws
 
 ## Paquetes del sistema instalados
@@ -13,9 +13,13 @@
 - joint_state_publisher + gui ✓
 - ros2_control + ros2_controllers ✓
 - diff_drive_controller ✓
-- gz_ros2_control ✓
+- gz_ros2_control ✓ (desde source, con fix WSL2)
 - ur_description ✓
-- husky_description: pendiente (desde source, fase 2)
+- clearpath_gz ✓
+- clearpath_config ✓
+- clearpath_config_live ✓
+- clearpath_viz ✓
+- ros-jazzy-clearpath-* (plataforma a200 / Husky) ✓
 
 ## Paquetes ROS 2 del proyecto
 - wind_tower_description (ament_cmake) ✓
@@ -25,11 +29,31 @@
 - wind_tower_perception: pendiente
 - wind_tower_inspection_behaviour: pendiente
 
+## gz_ros2_control — fix WSL2
+- Clonado desde source: jazzy branch
+- Ruta: ros2_ws/src/gz_ros2_control/
+- Bug: null-pointer dereference en ECM JointType/JointAxis components
+- Fix: null-checks con RCLCPP_WARN y continue en gz_system.cpp ~línea 296
+- Compilado con: colcon build --packages-select gz_ros2_control
+
+## Simulación funcionando
+- Lanzar: ros2 launch clearpath_gz simulation.launch.py world:=warehouse rviz:=true
+- Entorno: ai-on + export PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+- Controladores activos: platform_velocity_controller, joint_state_broadcaster, arm_0_joint_trajectory_controller
+- Joints cargados: 4 ruedas Husky + 6 joints UR5e
+- Sensores publicando: cámara (inspection_camera) + LiDAR (hokuyo)
+
+## Configuración del robot
+- Archivo: ros2_ws/src/wind_tower_bringup/config/robot.yaml
+- Symlink: ~/clearpath/robot.yaml → robot.yaml del proyecto
+- Robot: Husky a200 + UR5e + Hokuyo LiDAR + Intel RealSense D435
+
 ## Último paso completado
-- 3 paquetes ROS 2 creados con licencia Apache-2.0
-- Estructura de carpetas (urdf, meshes, launch, rviz, worlds, config) creada
-- Bug GZ_SIM_RESOURCE_PATH corregido en .bashrc
-- 2 commits en rama main
+- Fix gz_ros2_control WSL2 (segfault por nullptr en ECM components)
+- Simulación completa Husky + UR5e en Gazebo Harmonic ✓
+- Robot visible en RViz + Gazebo con todos los joints y controladores activos
 
 ## Próximo paso
-- Fase 2: Crear URDF/Xacro del robot compuesto Husky + UR5e
+- Fase 7: Añadir tramo de torre eólica (STL) + viradores al mundo Gazebo
+- Crear launch file propio en wind_tower_bringup
+- Añadir PYTHONPATH fix permanente al entorno
