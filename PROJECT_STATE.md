@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-## Fase actual: 0 - Auditoría del entorno (COMPLETADA)
+## Fase actual: 1 - Estructura de paquetes ROS 2 (COMPLETADA)
 
 ## Entorno
 - OS: Ubuntu 24.04 LTS (WSL2)
@@ -18,11 +18,18 @@
 - husky_description: pendiente (desde source, fase 2)
 
 ## Paquetes ROS 2 del proyecto
-- Ninguno aún
+- wind_tower_description (ament_cmake) ✓
+- wind_tower_bringup (ament_python) ✓
+- wind_tower_simulation (ament_cmake) ✓
+- wind_tower_control: pendiente
+- wind_tower_perception: pendiente
+- wind_tower_inspection_behaviour: pendiente
 
 ## Último paso completado
-- Repo Git inicializado en ~/ROS2_wind_tower_inspection (rama main)
-- .gitignore creado
+- 3 paquetes ROS 2 creados con licencia Apache-2.0
+- Estructura de carpetas (urdf, meshes, launch, rviz, worlds, config) creada
+- Bug GZ_SIM_RESOURCE_PATH corregido en .bashrc
+- 2 commits en rama main
 
 ## Próximo paso
-- Fase 1: Crear estructura de paquetes ROS 2 del proyecto
+- Fase 2: Crear URDF/Xacro del robot compuesto Husky + UR5e
