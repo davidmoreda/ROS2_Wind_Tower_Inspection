@@ -1,0 +1,155 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="wind_tower_world">
+
+    <physics type="ode">
+      <max_step_size>0.003</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>333</real_time_update_rate>
+    </physics>
+
+    <plugin name='gz::sim::systems::Physics'        filename='libgz-sim-physics-system.so'/>
+    <plugin name='gz::sim::systems::UserCommands'   filename='libgz-sim-user-commands-system.so'/>
+    <plugin name='gz::sim::systems::SceneBroadcaster' filename='libgz-sim-scene-broadcaster-system.so'/>
+    <plugin name='gz::sim::systems::Contact'        filename='libgz-sim-contact-system.so'/>
+    <plugin name="gz::sim::systems::Sensors"        filename="libgz-sim-sensors-system.so">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin name="gz::sim::systems::Imu"    filename="libgz-sim-imu-system.so"/>
+    <plugin name="gz::sim::systems::NavSat" filename="libgz-sim-navsat-system.so"/>
+
+    <scene>
+      <ambient>0.8 0.8 0.8 1</ambient>
+      <background>0.3 0.3 0.35 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 20 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Suelo -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <surface><friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction></surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.35 0.35 0.35 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════
+         NAVE INDUSTRIAL
+         60 m largo (Y: -30 a +30)
+         30 m ancho (X: -15 a +15)
+         18 m altura
+         ═══════════════════════════════════════════ -->
+
+    <!-- Pared norte -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 30 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>30 0.4 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>30 0.4 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared sur -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -30 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>30 0.4 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>30 0.4 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared este -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>15 0 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.4 60 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.4 60 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared oeste -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-15 0 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.4 60 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.4 60 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════
+         TRAMO DE TORRE EÓLICA
+         STL en mm, eje Z axial → scale 0.001
+         Tumbado: eje axial a lo largo de Y mundial
+         Pose: roll=1.5708 (Z local → -Y mundial)
+         Centro mundial: (0, 0, 4)
+           x_model = -4   (centra sección X: 0→8 m)
+           y_model = +15  (centra largo  Z: 0→30 m → Y: -15..+15)
+           z_model =  0   (base Y local 0→8 m queda en Z mundial 0→8 m)
+         ═══════════════════════════════════════════ -->
+    <model name="wind_tower_tube">
+      <static>true</static>
+      <pose>-4 15 0 1.5708 0 0</pose>
+      <link name="tube_link">
+        <visual name="visual">
+          <geometry>
+            <mesh>
+              <uri>model://TRAMO_TORRE.STL</uri>
+              <scale>0.001 0.001 0.001</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.55 0.58 0.62 1</ambient>
+            <diffuse>0.55 0.58 0.62 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <mesh>
+              <uri>model://TRAMO_TORRE.STL</uri>
+              <scale>0.001 0.001 0.001</scale>
+            </mesh>
+          </geometry>
+        </collision>
+      </link>
+    </model>
+
+  </world>
+</sdf>

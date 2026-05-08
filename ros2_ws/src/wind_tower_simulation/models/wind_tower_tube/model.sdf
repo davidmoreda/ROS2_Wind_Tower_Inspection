@@ -1,0 +1,45 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <model name="wind_tower_tube">
+    <static>true</static>
+    <link name="tube_link">
+      <!-- Cilindro: radio 4 m, largo 30 m. Eje Z por defecto en SDF. -->
+      <!-- La pose de spawn rota 90° en R para que el eje quede horizontal (Y). -->
+      <visual name="visual">
+        <geometry>
+          <cylinder>
+            <radius>4.0</radius>
+            <length>30.0</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.55 0.6 0.65 1</ambient>
+          <diffuse>0.55 0.6 0.65 1</diffuse>
+          <specular>0.2 0.2 0.2 1</specular>
+        </material>
+      </visual>
+      <collision name="collision">
+        <geometry>
+          <cylinder>
+            <radius>4.0</radius>
+            <length>30.0</length>
+          </cylinder>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>0.8</mu>
+              <mu2>0.8</mu2>
+            </ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>100</kd>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+    </link>
+  </model>
+</sdf>
