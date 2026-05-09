@@ -10,8 +10,16 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', ['launch/simulation.launch.py']),
-        ('share/' + package_name + '/config', ['config/robot.yaml']),
+        ('share/' + package_name + '/launch', [
+            'launch/simulation.launch.py',
+            'launch/slam.launch.py',
+            'launch/rtabmap.launch.py',
+        ]),
+        ('share/' + package_name + '/config', [
+            'config/robot.yaml',
+            'config/slam_toolbox.yaml',
+            'config/ekf.yaml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -28,6 +36,11 @@ setup(
         'console_scripts': [
             'ps5_teleop = wind_tower_bringup.ps5_teleop:main',
             'dualsense_joy = wind_tower_bringup.dualsense_joy:main',
+            'tf_static_relay = wind_tower_bringup.tf_static_relay:main',
+            'scan_gate = wind_tower_bringup.scan_gate_node:main',
+            'turner_node = wind_tower_bringup.turner_node:main',
+            'map_accumulator = wind_tower_bringup.map_accumulator_node:main',
+            'cylinder_localizer = wind_tower_bringup.cylinder_localizer_node:main',
         ],
     },
 )
