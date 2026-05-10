@@ -124,9 +124,18 @@
            z_model =  0   (base Y local 0→8 m queda en Z mundial 0→8 m)
          ═══════════════════════════════════════════ -->
     <model name="wind_tower_tube">
-      <static>true</static>
+      <static>false</static>
       <pose>-4 15 0 1.5708 0 0</pose>
       <link name="tube_link">
+        <!-- Inercia de cilindro hueco Ø8m×30m, masa simulada -->
+        <inertial>
+          <mass>2000</mass>
+          <inertia>
+            <ixx>155000</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>155000</iyy><iyz>0</iyz>
+            <izz>32000</izz>
+          </inertia>
+        </inertial>
         <visual name="visual">
           <geometry>
             <mesh>
@@ -149,6 +158,32 @@
           </geometry>
         </collision>
       </link>
+
+      <!-- Joint revolute: fija traslación, permite rotación alrededor del eje axial del tubo -->
+      <!-- pose en frame tube_link: centro sección X 0→8m = 4, Y 0→8m = 4 -->
+      <joint name="turner_joint" type="revolute">
+        <parent>world</parent>
+        <child>tube_link</child>
+        <pose>4.0 4.0 0 0 0 0</pose>
+        <axis>
+          <xyz expressed_in="__model__">0 0 1</xyz>
+          <limit><lower>-1e16</lower><upper>1e16</upper></limit>
+          <dynamics><damping>50.0</damping><friction>10.0</friction></dynamics>
+        </axis>
+      </joint>
+
+      <!-- Controlador de velocidad del virador -->
+      <plugin filename="gz-sim-joint-controller-system"
+              name="gz::sim::systems::JointController">
+        <joint_name>turner_joint</joint_name>
+        <use_force_commands>false</use_force_commands>
+        <initial_velocity>0.0</initial_velocity>
+      </plugin>
+
+      <!-- Publicador de estado del joint (ángulo) -->
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher"/>
+
     </model>
 
   </world>

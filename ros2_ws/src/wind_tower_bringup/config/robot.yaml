@@ -19,6 +19,10 @@ platform:
     - name: top_plate
       type: a200.top_plate
       model: pacs
+  extras:
+    urdf:
+      package: wind_tower_description
+      path: urdf/inspection_camera_lighting.urdf.xacro
 
 manipulators:
   arms:
@@ -32,29 +36,27 @@ manipulators:
       kinematics_parameters_file: "$(find ur_description)/config/ur5e/default_kinematics.yaml"
       poses:
         - name: home
-          joints: [0.0, -1.57, 0.0, -1.57, 0.0, 0.0]
+          joints: [0.0, -1.57, 1.57, -1.57, -1.57, 0.0]
 
 sensors:
+  imu:
+    - model: phidgets_spatial
+      urdf_enabled: true
+      launch_enabled: false
+      parent: base_link
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+  lidar3d:
+    - model: velodyne_lidar
+      urdf_enabled: true
+      launch_enabled: false
+      parent: top_plate_link
+      xyz: [0.25, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
   lidar2d:
     - model: hokuyo_ust
-      urdf_enabled: true
+      urdf_enabled: false
       launch_enabled: false
       parent: front_bumper_mount
       xyz: [0.0, 0.0, 0.1]
       rpy: [0.0, 0.0, 0.0]
-  camera:
-    - model: intel_realsense
-      urdf_enabled: true
-      launch_enabled: false
-      parent: default_mount
-      xyz: [0.0, 0.0, 0.5]
-      rpy: [0.0, 0.0, 0.0]
-      ros_parameters:
-        camera:
-          camera_name: inspection_camera
-          device_type: d435
-          serial_no: "0"
-          enable_color: true
-          rgb_camera.profile: 1280,720,30
-          enable_depth: true
-          depth_module.profile: 1280,720,30

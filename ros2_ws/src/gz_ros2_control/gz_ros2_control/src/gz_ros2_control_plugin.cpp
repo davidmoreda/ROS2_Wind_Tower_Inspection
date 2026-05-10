@@ -250,8 +250,12 @@ GazeboSimROS2ControlPlugin::GazeboSimROS2ControlPlugin()
 //////////////////////////////////////////////////
 GazeboSimROS2ControlPlugin::~GazeboSimROS2ControlPlugin()
 {
-  this->dataPtr->executor_->cancel();
-  this->dataPtr->thread_executor_spin_.join();
+  if (this->dataPtr->executor_) {
+    this->dataPtr->executor_->cancel();
+  }
+  if (this->dataPtr->thread_executor_spin_.joinable()) {
+    this->dataPtr->thread_executor_spin_.join();
+  }
 }
 
 //////////////////////////////////////////////////

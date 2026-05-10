@@ -1,0 +1,65 @@
+state_machine:
+  ros__parameters:
+    auto_start: false
+    cmd_vel_topic: /robot/platform/cmd_vel
+    turner_cmd_vel_topic: /turner/cmd_vel
+    odom_topic: /robot/platform/odom/filtered
+    turner_angle_topic: /turner/angle
+    bottom_lane_locked_topic: /inspection/bottom_lane_locked
+    safe_to_scan_topic: /inspection/safe_to_scan
+    safe_to_index_tube_topic: /inspection/safe_to_index_tube
+
+    mission:
+      x_min_m: -15.0
+      x_max_m: 15.0
+      axial_axis: x
+      lane_length_m: 1.0
+      lane_end_tolerance_m: 0.25
+      target_total_rotation_deg: 360.0
+      lane_delta_theta_deg: 5.0
+      turner_angle_tolerance_deg: 0.5
+      index_overshoot_guard_deg: 2.0
+      settle_time_s: 2.0
+      use_lawnmower_pattern: true
+      use_tangential_indexing: true
+      tangential_yaw_offset_deg: 90.0
+
+    control:
+      axial_speed_mps: 0.05
+      max_angular_z_rad_s: 0.20
+      k_heading: 0.8
+      k_axial_heading_p: 0.8
+      k_axial_heading_i: 0.0
+      max_axial_heading_integral_deg_s: 30.0
+      k_axial_lateral_p: 0.5
+      k_axial_lateral_i: 0.0
+      axial_lateral_sign: 1.0   # cambia a -1.0 si el robot se aleja del fondo en vez de volver
+      max_axial_lateral_integral_deg_s: 30.0
+      align_linear_speed_mps: 0.02
+      align_max_angular_z_rad_s: 0.15
+      k_align_heading_p: 0.5
+      k_align_lateral_p: 0.8
+      k_align_lateral_i: 0.0
+      align_lateral_sign: 1.0
+      max_align_lateral_integral_deg_s: 30.0
+      turner_speed_rad_s: 0.02
+      publish_rate_hz: 30.0
+      rotate_angular_speed_rad_s: 0.30
+      rotate_yaw_tolerance_deg: 5.0
+      k_rotate_yaw_p: 1.0
+      k_rotate_yaw_i: 0.0
+      max_rotate_yaw_integral_deg_s: 30.0
+      tube_radius_m: 3.925
+      index_compensation_sign: 1.0
+      max_index_linear_speed_mps: 0.45
+      k_index_lateral_p: 0.0
+      k_index_lateral_i: 0.0
+
+    safety:
+      max_odom_age_s: 2.0
+      max_turner_age_s: 2.0
+      max_flags_age_s: 2.0
+      align_lock_hold_s: 1.0
+      require_bottom_lane_lock: true
+      require_safe_to_scan_for_axial: true
+      require_safe_to_index_tube: true

@@ -28,6 +28,9 @@ class ImuState:
     roll_deg: float
     pitch_deg: float
     lateral_angle_deg: float
+    raw_roll_deg: float
+    raw_pitch_deg: float
+    raw_lateral_angle_deg: float
     accel_norm: float
     angular_speed: float
 
@@ -88,6 +91,11 @@ class StabilityMonitorNode(Node):
         self._odom: Optional[OdomState] = None
         self._geometry: Optional[GeometryState] = None
         self._turner: Optional[TurnerState] = None
+        self._imu_calibration_samples = []
+        self._imu_calibrated = not self._auto_calibrate_imu
+        self._roll_offset_deg = self._manual_roll_offset_deg
+        self._pitch_offset_deg = self._manual_pitch_offset_deg
+        self._lateral_offset_deg = self._manual_lateral_offset_deg
         self._callback_counts = {
             'imu': 0,
             'odom': 0,
@@ -128,6 +136,12 @@ class StabilityMonitorNode(Node):
         self.declare_parameter('cylinder_stats_topic', '/cylinder_fit/stats')
         self.declare_parameter('turner_angle_topic', '/turner/angle')
 
+        self.declare_parameter('imu_calibration.auto_calibrate_on_start', True)
+        self.declare_parameter('imu_calibration.sample_count', 50)
+        self.declare_parameter('imu_calibration.roll_offset_deg', 0.0)
+        self.declare_parameter('imu_calibration.pitch_offset_deg', 0.0)
+        self.declare_parameter('imu_calibration.lateral_angle_offset_deg', 0.0)
+
         self.declare_parameter('bottom_lane.max_roll_deg', 5.0)
         self.declare_parameter('bottom_lane.max_pitch_deg', 5.0)
         self.declare_parameter('bottom_lane.max_lateral_angle_deg', 5.0)
@@ -153,6 +167,18 @@ class StabilityMonitorNode(Node):
         self._cylinder_stats_topic = self.get_parameter(
             'cylinder_stats_topic').value
         self._turner_angle_topic = self.get_parameter('turner_angle_topic').value
+
+        self._auto_calibrate_imu = bool(
+            self.get_parameter('imu_calibration.auto_calibrate_on_start').value)
+        self._imu_calibration_sample_count = max(
+            1, int(self.get_parameter('imu_calibration.sample_count').value))
+        self._manual_roll_offset_deg = float(
+            self.get_parameter('imu_calibration.roll_offset_deg').value)
+        self._manual_pitch_offset_deg = float(
+            self.get_parameter('imu_calibration.pitch_offset_deg').value)
+        self._manual_lateral_offset_deg = float(
+            self.get_parameter(
+                'imu_calibration.lateral_angle_offset_deg').value)
 
         self._max_roll_deg = self.get_parameter(
             'bottom_lane.max_roll_deg').value
@@ -197,13 +223,13 @@ class StabilityMonitorNode(Node):
 
     def _imu_cb(self, msg: Imu):
         self._callback_counts['imu'] += 1
-        roll_deg, pitch_deg = _quat_to_roll_pitch(msg.orientation)
+        raw_roll_deg, raw_pitch_deg = _quat_to_roll_pitch(msg.orientation)
 
         ax = msg.linear_acceleration.x
         ay = msg.linear_acceleration.y
         az = msg.linear_acceleration.z
         accel_norm = math.sqrt(ax * ax + ay * ay + az * az)
-        lateral_angle = math.degrees(
+        raw_lateral_angle = math.degrees(
             math.atan2(math.sqrt(ax * ax + ay * ay), abs(az)))
 
         wx = msg.angular_velocity.x
@@ -211,11 +237,37 @@ class StabilityMonitorNode(Node):
         wz = msg.angular_velocity.z
         angular_speed = math.sqrt(wx * wx + wy * wy + wz * wz)
 
+        if self._auto_calibrate_imu and not self._imu_calibrated:
+            self._imu_calibration_samples.append(
+                (raw_roll_deg, raw_pitch_deg, raw_lateral_angle))
+            if len(self._imu_calibration_samples) >= self._imu_calibration_sample_count:
+                n = float(len(self._imu_calibration_samples))
+                self._roll_offset_deg = sum(
+                    sample[0] for sample in self._imu_calibration_samples) / n
+                self._pitch_offset_deg = sum(
+                    sample[1] for sample in self._imu_calibration_samples) / n
+                self._lateral_offset_deg = sum(
+                    sample[2] for sample in self._imu_calibration_samples) / n
+                self._imu_calibrated = True
+                self.get_logger().info(
+                    'IMU bottom-lane calibrada: '
+                    f'roll_offset={self._roll_offset_deg:.3f}deg, '
+                    f'pitch_offset={self._pitch_offset_deg:.3f}deg, '
+                    f'lateral_offset={self._lateral_offset_deg:.3f}deg'
+                )
+
+        roll_deg = raw_roll_deg - self._roll_offset_deg
+        pitch_deg = raw_pitch_deg - self._pitch_offset_deg
+        lateral_angle = abs(raw_lateral_angle - self._lateral_offset_deg)
+
         self._imu = ImuState(
             stamp_s=self._now_s(),
             roll_deg=roll_deg,
             pitch_deg=pitch_deg,
             lateral_angle_deg=lateral_angle,
+            raw_roll_deg=raw_roll_deg,
+            raw_pitch_deg=raw_pitch_deg,
+            raw_lateral_angle_deg=raw_lateral_angle,
             accel_norm=accel_norm,
             angular_speed=angular_speed,
         )
@@ -269,6 +321,7 @@ class StabilityMonitorNode(Node):
         imu_ok = False
         if imu_fresh:
             imu_ok = (
+                self._imu_calibrated and
                 abs(self._imu.roll_deg) <= self._max_roll_deg and
                 abs(self._imu.pitch_deg) <= self._max_pitch_deg and
                 self._imu.lateral_angle_deg <= self._max_lateral_angle_deg and
@@ -293,7 +346,7 @@ class StabilityMonitorNode(Node):
             )
             index_motion_ok = (
                 self._odom.linear_speed <= self._max_index_speed and
-                self._odom.yaw_rate <= self._max_index_speed
+                self._odom.yaw_rate <= self._max_yaw_rate
             )
 
         bottom_lane_locked = imu_ok and geometry_ok
@@ -327,6 +380,15 @@ class StabilityMonitorNode(Node):
                 self._turner.theta_rad if self._turner is not None else None
             ),
             'callback_counts': self._callback_counts,
+            'imu_calibration': {
+                'auto_calibrate_on_start': self._auto_calibrate_imu,
+                'calibrated': self._imu_calibrated,
+                'samples': len(self._imu_calibration_samples),
+                'sample_count': self._imu_calibration_sample_count,
+                'roll_offset_deg': self._roll_offset_deg,
+                'pitch_offset_deg': self._pitch_offset_deg,
+                'lateral_angle_offset_deg': self._lateral_offset_deg,
+            },
         }
         self._pub_stability.publish(String(data=json.dumps(status)))
 

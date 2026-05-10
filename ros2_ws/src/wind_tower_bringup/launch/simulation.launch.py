@@ -159,6 +159,45 @@ def generate_launch_description():
         ],
     )
 
+    # Bridge cámara RGB de inspección montada en el TCP del UR5e.
+    # ros_gz_image convierte imágenes de Gazebo de forma más robusta que el
+    # parameter_bridge genérico; CameraInfo sigue usando ros_gz_bridge.
+    inspection_image_bridge = Node(
+        package='ros_gz_image',
+        executable='image_bridge',
+        name='inspection_image_bridge',
+        output='screen',
+        arguments=[
+            '/robot/sensors/inspection_camera/image',
+        ],
+    )
+
+    inspection_image_relay = Node(
+        package='topic_tools',
+        executable='relay',
+        name='inspection_image_relay',
+        output='screen',
+        arguments=[
+            '/robot/sensors/inspection_camera/image',
+            '/inspection/camera/image_raw',
+        ],
+    )
+
+    inspection_camera_info_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='inspection_camera_info_bridge',
+        output='screen',
+        arguments=[
+            '/robot/sensors/inspection_camera/image/camera_info'
+            '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+        ],
+        remappings=[
+            ('/robot/sensors/inspection_camera/image/camera_info',
+             '/inspection/camera/camera_info'),
+        ],
+    )
+
     robot_spawn = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_clearpath_gz, 'launch', 'robot_spawn.launch.py')
@@ -251,6 +290,9 @@ def generate_launch_description():
         turner_cmd_bridge,
         turner_state_bridge,
         lidar3d_bridge,
+        inspection_image_bridge,
+        inspection_image_relay,
+        inspection_camera_info_bridge,
         robot_description_relay,
         tf_relay,
         tf_static_relay,

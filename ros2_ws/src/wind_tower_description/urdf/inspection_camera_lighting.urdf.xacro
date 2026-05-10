@@ -1,0 +1,171 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="inspection_camera_lighting">
+
+  <!--
+    Simulated inspection head mounted on the UR5e TCP.
+    It provides a close-range RGB camera and two external grazing lights for
+    surface inspection experiments. No real camera driver is launched here.
+  -->
+
+  <link name="inspection_camera_mount_link">
+    <inertial>
+      <mass value="0.20"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
+    </inertial>
+    <visual>
+      <origin xyz="0.04 0 0" rpy="0 1.5708 0"/>
+      <geometry>
+        <box size="0.08 0.05 0.05"/>
+      </geometry>
+      <material name="inspection_camera_body">
+        <color rgba="0.05 0.05 0.05 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.04 0 0" rpy="0 1.5708 0"/>
+      <geometry>
+        <box size="0.08 0.05 0.05"/>
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="inspection_camera_mount_joint" type="fixed">
+    <parent link="arm_0_tool0"/>
+    <child link="inspection_camera_mount_link"/>
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="inspection_camera_lens_link">
+    <visual>
+      <origin xyz="0.035 0 0" rpy="0 1.5708 0"/>
+      <geometry>
+        <cylinder radius="0.018" length="0.05"/>
+      </geometry>
+      <material name="inspection_camera_lens">
+        <color rgba="0.01 0.01 0.01 1"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="inspection_camera_lens_joint" type="fixed">
+    <parent link="inspection_camera_mount_link"/>
+    <child link="inspection_camera_lens_link"/>
+    <origin xyz="0.08 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="inspection_camera_optical_frame"/>
+
+  <joint name="inspection_camera_optical_joint" type="fixed">
+    <parent link="inspection_camera_lens_link"/>
+    <child link="inspection_camera_optical_frame"/>
+    <origin xyz="0.06 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="inspection_light_left_link">
+    <visual>
+      <geometry>
+        <box size="0.035 0.01 0.012"/>
+      </geometry>
+      <material name="inspection_light_emissive_left">
+        <color rgba="1.0 0.92 0.72 1"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="inspection_light_left_joint" type="fixed">
+    <parent link="inspection_camera_mount_link"/>
+    <child link="inspection_light_left_link"/>
+    <origin xyz="0.08 0.045 0" rpy="0 0 0.20"/>
+  </joint>
+
+  <link name="inspection_light_right_link">
+    <visual>
+      <geometry>
+        <box size="0.035 0.01 0.012"/>
+      </geometry>
+      <material name="inspection_light_emissive_right">
+        <color rgba="1.0 0.92 0.72 1"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="inspection_light_right_joint" type="fixed">
+    <parent link="inspection_camera_mount_link"/>
+    <child link="inspection_light_right_link"/>
+    <origin xyz="0.08 -0.045 0" rpy="0 0 -0.20"/>
+  </joint>
+
+  <gazebo reference="inspection_camera_optical_frame">
+    <sensor name="inspection_camera" type="camera">
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <update_rate>20</update_rate>
+      <topic>$(arg namespace)/sensors/inspection_camera/image</topic>
+      <camera name="inspection_camera">
+        <pose>0 0 0 0 -1.5708 1.5708</pose>
+        <horizontal_fov>0.95</horizontal_fov>
+        <image>
+          <width>1280</width>
+          <height>720</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.08</near>
+          <far>5.0</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.004</stddev>
+        </noise>
+        <gz_frame_id>inspection_camera_optical_frame</gz_frame_id>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="inspection_light_left_link">
+    <light name="inspection_light_left" type="spot">
+      <pose>0 0 0 0 0 0</pose>
+      <visualize>false</visualize>
+      <cast_shadows>false</cast_shadows>
+      <diffuse>1.0 0.92 0.75 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>3.0</range>
+        <constant>0.4</constant>
+        <linear>0.25</linear>
+        <quadratic>0.05</quadratic>
+      </attenuation>
+      <direction>1 -0.25 0</direction>
+      <spot>
+        <inner_angle>0.35</inner_angle>
+        <outer_angle>0.75</outer_angle>
+        <falloff>1.0</falloff>
+      </spot>
+    </light>
+  </gazebo>
+
+  <gazebo reference="inspection_light_right_link">
+    <light name="inspection_light_right" type="spot">
+      <pose>0 0 0 0 0 0</pose>
+      <visualize>false</visualize>
+      <cast_shadows>false</cast_shadows>
+      <diffuse>1.0 0.92 0.75 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <attenuation>
+        <range>3.0</range>
+        <constant>0.4</constant>
+        <linear>0.25</linear>
+        <quadratic>0.05</quadratic>
+      </attenuation>
+      <direction>1 0.25 0</direction>
+      <spot>
+        <inner_angle>0.35</inner_angle>
+        <outer_angle>0.75</outer_angle>
+        <falloff>1.0</falloff>
+      </spot>
+    </light>
+  </gazebo>
+
+</robot>

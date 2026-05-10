@@ -34,6 +34,7 @@ from evdev import ecodes
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
+from std_msgs.msg import Bool
 
 DEVICE_PATH = '/dev/input/event0'
 
@@ -92,10 +93,18 @@ class DualSenseJoy(Node):
     def __init__(self):
         super().__init__('dualsense_joy')
 
+        self.declare_parameter('autonomous_stop_button_index', 2)
+        self._autonomous_stop_button_index = int(
+            self.get_parameter('autonomous_stop_button_index').value)
+
         self._pub = self.create_publisher(Joy, '/robot/joy_teleop/joy', 10)
+        self.create_subscription(
+            Bool, '/inspection/autonomous_active', self._autonomous_active_cb, 10)
 
         self._axes = [0.0] * 6
         self._buttons = [0] * 13
+        self._autonomous_active = False
+        self.create_timer(0.1, self._active_lock_timer)
 
         try:
             self._dev = evdev.InputDevice(DEVICE_PATH)
@@ -136,9 +145,25 @@ class DualSenseJoy(Node):
     def _publish(self):
         msg = Joy()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.axes = list(self._axes)
-        msg.buttons = list(self._buttons)
+        if self._autonomous_active:
+            # Bloquea teleop Clearpath y mandos manuales mientras manda la misión.
+            msg.axes = [0.0] * len(self._axes)
+            msg.buttons = [0] * len(self._buttons)
+            # Círculo queda disponible como STOP de misión.
+            idx = self._autonomous_stop_button_index
+            if idx >= 0 and len(msg.buttons) > idx:
+                msg.buttons[idx] = self._buttons[idx]
+        else:
+            msg.axes = list(self._axes)
+            msg.buttons = list(self._buttons)
         self._pub.publish(msg)
+
+    def _autonomous_active_cb(self, msg: Bool):
+        self._autonomous_active = bool(msg.data)
+
+    def _active_lock_timer(self):
+        if self._autonomous_active:
+            self._publish()
 
 
 def main(args=None):

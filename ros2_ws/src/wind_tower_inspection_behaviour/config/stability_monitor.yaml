@@ -5,6 +5,13 @@ stability_monitor:
     cylinder_stats_topic: /cylinder_fit/stats
     turner_angle_topic: /turner/angle
 
+    imu_calibration:
+      auto_calibrate_on_start: true
+      sample_count: 50
+      roll_offset_deg: 0.0
+      pitch_offset_deg: 0.0
+      lateral_angle_offset_deg: 0.0
+
     bottom_lane:
       max_roll_deg: 5.0
       max_pitch_deg: 5.0

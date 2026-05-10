@@ -1,0 +1,32 @@
+cylindrical_map:
+  ros__parameters:
+    odom_topic: /robot/platform/odom/filtered
+    turner_angle_topic: /turner/angle
+    bottom_lane_locked_topic: /inspection/bottom_lane_locked
+    safe_to_scan_topic: /inspection/safe_to_scan
+    mission_state_topic: /inspection/state_text
+
+    tube:
+      radius_m: 4.0
+      length_m: 30.0
+      x_min_m: -15.0
+      x_max_m: 15.0
+
+    lanes:
+      useful_surface_width_m: 0.50
+      overlap: 0.20
+      theta_cell_deg: 5.0
+      x_cell_m: 0.10
+      lane_zero_theta_deg: 0.0
+
+    coverage:
+      nominal_only_when_safe_to_scan: true
+      bypass_counts_as_nominal: false
+      manual_default_state: AXIAL_SCAN
+
+    freshness:
+      max_odom_age_s: 0.5
+      max_turner_age_s: 1.0
+      max_flags_age_s: 0.5
+
+    publish_rate_hz: 5.0

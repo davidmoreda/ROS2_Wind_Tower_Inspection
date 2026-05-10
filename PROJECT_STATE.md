@@ -25,7 +25,7 @@ Esto implica:
 | Virador girando continuamente mientras el robot avanza | Tubo parado durante cada calle axial |
 | Cobertura inferida por hélice ideal | Cobertura verificable en malla `(x, θ)` |
 | Control principal de velocidades helicoidales | Máquina de estados + estabilidad + indexado |
-| ICP potencialmente tentador para rotación | `θ_tubo` viene del encoder del virador |
+| ICP potencialmente tentador para rotación | `θ_tube` viene del encoder del virador |
 | Esquiva como detalle secundario | Esquiva con modo especial y retorno obligatorio |
 
 No debe documentarse “100% garantizado” sin métrica de cobertura y evidencias por celda.
@@ -52,7 +52,7 @@ Nodos instalados:
 | Nodo | Estado | Función |
 |---|---|---|
 | `dualsense_joy.py` | Funcional | Driver PS5 vía evdev |
-| `ps5_teleop.py` | Funcional | Teleop brazo UR5e + control virador |
+| `ps5_teleop.py` | Funcional | Teleop brazo UR5e + control virador; silencia el turner durante autonomía |
 | `turner_node.py` | Funcional | Publica `/turner/angle` y `/turner/angle_deg` a 20Hz |
 | `tf_static_relay.py` | Funcional | Relay TRANSIENT_LOCAL para TF estáticos |
 | `scan_gate_node.py` | Disponible | Filtro sectorial LaserScan |
@@ -78,13 +78,15 @@ Config:
 Paquete creado para la lógica autónoma de inspección por calles axiales.
 
 - `stability_monitor_node.py` — implementado y validado como MVP; publica `bottom_lane_locked`, `safe_to_scan`, `safe_to_index_tube` y resumen `/inspection/stability`.
-- `inspection_state_machine_node.py` — pendiente.
+- `cylindrical_map_node.py` — implementado como MVP pasivo; registra cobertura observada/nominal por celdas `(x, θ)` sin mover el robot.
+- `state_machine_node.py` — implementado como MVP operativo; manda avance axial, indexado del virador, rotación tangencial, realineación a bottom lane y control PI básico. Sigue en validación de misión larga.
+- `inspection.launch.py` — agrupa `cylinder_localizer`, `dualsense_joy`, `ps5_teleop`, `stability_monitor`, `cylindrical_map` y `state_machine`; `auto_start=false` por defecto y ya expone el perfil corto de pruebas (`1m / 5deg / 30Hz`).
 - `bottom_lane_controller.py`
 - `tube_indexing_controller.py`
-- `cylindrical_map_node.py`
-- `bushing_detector_node.py`
+- `obstacle_manager_node.py`
+- `bypass_manager_node.py`
+- `image_capture_manager_node.py`
 - `local_inspection_controller.py`
-- `anomaly_detector_node.py`
 - `report_generator_node.py`
 
 El antiguo `coverage_controller` helicoidal no debe implementarse como controlador de pasada continua. Si se mantiene el concepto, debe ser `coverage_manager` de malla `(x, θ)`.
@@ -102,42 +104,66 @@ El antiguo `coverage_controller` helicoidal no debe implementarse como controlad
 ## Configurado pero pendiente de validar
 
 - [ ] Botón Cuadrado del mando para virador − figura como pendiente de verificación en el mapeo.
-- [ ] IMU simulada: `robot.yaml`, bridge y EKF están configurados, pero falta registrar prueba de `/robot/sensors/imu_0/data`.
+- [x] IMU simulada: `robot.yaml`, bridge, EKF Clearpath y `stability_monitor` validados con `/robot/sensors/imu_0/data`.
 - [x] Odometría filtrada Clearpath disponible en `/robot/platform/odom/filtered` (~43Hz en prueba).
 - [ ] `cylinder_localizer_node.py`: existe como prototipo, falta validar robustez con movimiento real del robot.
 - [ ] `map_accumulator_node.py`: existe como prototipo de nube acumulada, no sustituye todavía a `cylindrical_map_node.py`.
-- [ ] Cámara RGB industrial e iluminación controlada: pendientes.
-- [ ] Máquina de estados de inspección: pendiente.
+- [x] Cámara RGB industrial e iluminación controlada: prototipo simulado añadido al TCP del UR5e; imagen directa validada en `/robot/sensors/inspection_camera/image` (~16-17Hz).
+- [ ] Alias `/inspection/camera/image_raw`: en desarrollo; usar por ahora el topic directo de cámara si el alias falla.
+- [x] Máquina de estados de inspección: operativa en simulación con avance axial, indexado, giro tangencial, realineación y `ALIGN_TO_BOTTOM_LANE`.
 - [x] `stability_monitor_node.py`: MVP validado en simulación.
+- [x] `cylindrical_map_node.py`: MVP probado manualmente con robot estable, avance axial y cambio de celda angular tras giro del tubo.
 - [x] Teleop Clearpath limitado automáticamente por `simulation.launch.py` a 0.15 m/s normal y 0.30 m/s turbo para pruebas de inspección.
+- [x] Triángulo DualSense → `START_AUTO`: validado en simulación.
+- [x] Bloqueo de teleop durante autonomía mediante `/inspection/autonomous_active`: validado en simulación.
 
-## Mapeo de botones PS5 DualSense verificado
+## Mapeo de botones PS5 DualSense
 
 ```text
 axes[2]    = stick derecho X → shoulder_pan brazo
 axes[3]    = stick derecho Y → shoulder_lift brazo
 axes[4]    = L2 (-1 sin pulsar, +1 pulsado) → deadman brazo
-buttons[1] = Cruz (X)      → virador +   ← VERIFICADO
-buttons[3] = Cuadrado      → virador -   ← PENDIENTE verificar
+buttons[1] = Cruz (X)      → virador + según prueba real
+buttons[2] = Círculo       → STOP según prueba real
+buttons[3] = Triángulo     → START_AUTO según prueba real
 ```
+
+Nota: los índices son parametrizables en `ps5_teleop.py` y `inspection.launch.py` porque cambian según driver. Si vuelve a cambiar el mapeo, ajustar `ps5_start_button_index` y `ps5_stop_button_index`.
 
 ## Sensores y señales clave
 
 | Señal | Estado | Uso en metodología nueva |
 |---|---|---|
-| `/turner/angle` | Funcional | `θ_tubo` acumulado para indexado y malla |
+| `/turner/angle` | Funcional | `θ_tube` acumulado para indexado y malla |
 | `/turner/angle_deg` | Funcional | Diagnóstico humano |
 | `/turner/joint_state` | Funcional | Encoder simulado del virador |
-| `/turner/cmd_vel` | Funcional | Comando de giro; futuro uso solo en `INDEX_TUBE` |
+| `/turner/cmd_vel` | Funcional | Comando de giro; solo debe publicarse desde `INDEX_TUBE` en autonomía |
 | `/velodyne_points` | Funcional | Geometría, obstáculos, bushings, seguridad |
 | `/robot/platform/odom` | Configurado | Fuente de `x` para EKF |
-| `/robot/sensors/imu_0/data` | Configurado, validar | Gravedad, roll/pitch, `α_robot` |
+| `/robot/sensors/imu_0/data` | Verificado | Gravedad, roll/pitch, `α_robot` |
 | `/robot/platform/odom/filtered` | Verificado | Odometría filtrada Clearpath para `x` y velocidad |
 | `/inspection/bottom_lane_locked` | Verificado | True si IMU y geometría local cumplen umbrales |
 | `/inspection/safe_to_scan` | Verificado | True durante avance axial lento y estable |
-| `/inspection/safe_to_index_tube` | Verificado | True solo con robot estable y prácticamente parado |
-| Cámara RGB | Pendiente | Inspección superficial |
-| Iluminación controlada | Pendiente | Repetibilidad visual |
+| `/inspection/safe_to_index_tube` | Verificado | True solo con robot estable y prácticamente parado; puede oscilar si la misión no ha estabilizado todavía |
+| `/inspection/cylindrical_pose` | EN DESARROLLO | Pose cilíndrica simple en JSON para debug |
+| `/inspection/coverage_status` | EN DESARROLLO | Cobertura observada/nominal en JSON |
+| `/inspection/cylindrical_map_stats` | EN DESARROLLO | Estadísticas de malla `(x, θ)` |
+| `/robot/sensors/inspection_camera/image` | Verificado | Imagen RGB simulada desde cámara en TCP del UR5e |
+| `/inspection/camera/image_raw` | EN DESARROLLO | Alias objetivo para pipeline de inspección |
+| `/inspection/camera/camera_info` | EN DESARROLLO | Calibración intrínseca simulada |
+| Iluminación controlada | EN DESARROLLO | Dos luces rasantes simuladas en el cabezal |
+
+## Decisiones técnicas actuales
+
+| Área | Decisión |
+|---|---|
+| Navegación MVP | No usar Nav2 completo como núcleo; implementar controlador específico de calle axial |
+| Nav2 futuro | Evaluar Collision Monitor, Regulated Pure Pursuit o MPPI como herramientas, no como arquitectura base |
+| Métodos descartados por ahora | RL, TEB, SLAM 3D global con loop closures y surface tracing continuo complejo |
+| Brazo UR5e | Usar MoveIt 2/OMPL más adelante solo para inspección local con base parada |
+| Evidencia visual | Usar imágenes sincronizadas por distancia y metadatos; vídeo continuo solo para debug |
+| Cobertura | Solo nominal durante `AXIAL_SCAN` seguro; bypass no cuenta como cobertura nominal |
+| LiDAR | Planificar experimento de montaje actual de pie vs LiDAR tumbado, sin cambiar URDF todavía |
 
 ## Reglas técnicas de operación objetivo
 
@@ -164,6 +190,12 @@ Durante `INDEX_TUBE`:
 - Se verifica de nuevo `bottom_lane_locked`.
 - Solo entonces se inicia la siguiente calle.
 
+Durante `ALIGN_TO_BOTTOM_LANE`:
+
+- Se usa IMU + odometría para volver a la generatriz inferior.
+- No se marca cobertura nominal.
+- El objetivo es recuperar `bottom_lane_locked == true` y `safe_to_scan == true` antes de reanudar.
+
 ## Fixes críticos permanentes
 
 ### `gz_ros2_control` — fix WSL2
@@ -189,7 +221,7 @@ Durante `INDEX_TUBE`:
 ### Tubo — simetría cilíndrica
 
 - ICP no puede distinguir de forma fiable rotación pura en una sección circular.
-- `θ_tubo` debe venir del encoder del virador.
+- `θ_tube` debe venir del encoder del virador.
 - RTAB-Map debe mantenerse como herramienta secundaria; no fuente primaria de rotación.
 
 ## Variables de entorno (`ai-on`)
@@ -202,12 +234,14 @@ source /opt/ros/jazzy/setup.bash
 source ~/ROS2_wind_tower_inspection/ros2_ws/install/setup.bash
 ```
 
-## Próximos pasos técnicos
+## Pendiente inmediato
 
-1. Implementar `inspection_state_machine_node.py` con estados discretos mínimos.
-2. Implementar `tube_indexing_controller.py` usando `/turner/angle` como realimentación.
-3. Convertir el prototipo de nube acumulada en `cylindrical_map_node.py` con celdas `(x, θ)` y estados de cobertura.
-4. Añadir cámara RGB industrial e iluminación controlada al modelo.
+1. Validar misiones largas con `safe_to_index_tube` e `ALIGN_TO_BOTTOM_LANE` bajo carga real.
+2. Añadir histéresis temporal a `safe_to_index_tube` para evitar oscilaciones por una sola muestra.
+3. Ajustar la rampa del virador para eliminar trompicones residuales en Gazebo.
+4. Añadir capturas de cámara sincronizadas por distancia, no por FPS continuo.
+5. Generar informe de inspección en JSON/Markdown.
+6. Probar el perfil corto de depuración `1m / 5deg / 30Hz` en una secuencia completa de calles.
 
 ## Controladores ROS 2 activos
 
