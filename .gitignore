@@ -1,11 +1,64 @@
-# ROS 2
+# ROS 2 / colcon build artifacts
 build/
 install/
 log/
+.colcon/
+.ros/
+
+# Python caches and build outputs
 *.pyc
+*.pyo
+*.pyd
 __pycache__/
+*.egg
+*.egg-info/
+.eggs/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Editor / IDE
 .vscode/
+.idea/
 *.swp
+*.swo
+*~
+.#*
+\#*\#
+*.bak
+*.orig
+*.tmp
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Crash dumps / stray logs
+core
+*.core
+*.log
+
+# Agent / tooling local state (notas personales, no compartir entre máquinas)
 .claude/
 .codex/
 .agents/
+docs/agent/
+AGENTS.md
+CONVERSATION_LESSONS.md
+
+# Local debug captures
+debug_runs/
+
+# Documentación histórica archivada (privada, no en GitHub)
+docs/legacy/
+
+# Local environment overrides
+.env
+.env.*
+!.env.example

@@ -23,7 +23,6 @@ from launch.actions import (
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterFile
 
 
 ARGUMENTS = [
@@ -50,7 +49,6 @@ def generate_launch_description():
     pkg_ros_gz_sim     = get_package_share_directory('ros_gz_sim')
     pkg_wind_sim       = get_package_share_directory('wind_tower_simulation')
     pkg_wind_desc      = get_package_share_directory('wind_tower_description')
-    pkg_wind_bringup   = get_package_share_directory('wind_tower_bringup')
 
     world_file  = os.path.join(pkg_wind_sim,  'worlds',  'wind_tower_world.sdf')
     gui_config  = os.path.join(pkg_clearpath_gz, 'config', 'gui.config')
@@ -232,22 +230,6 @@ def generate_launch_description():
         ],
     )
 
-    # EKF experimental propio. En la integración Clearpath actual, la odometría
-    # validada para inspección es /robot/platform/odom/filtered.
-    ekf_node = Node(
-        package='robot_localization',
-        executable='ekf_node',
-        name='ekf_filter_node',
-        output='screen',
-        parameters=[
-            ParameterFile(
-                os.path.join(pkg_wind_bringup, 'config', 'ekf.yaml'),
-                allow_substs=True,
-            ),
-            {'use_sim_time': True},
-        ],
-    )
-
     inspection_teleop_limits = TimerAction(
         period=20.0,
         actions=[
@@ -298,7 +280,6 @@ def generate_launch_description():
         tf_static_relay,
         turner_node,
         imu_bridge,
-        ekf_node,
         robot_spawn,
         inspection_teleop_limits,
     ])
