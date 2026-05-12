@@ -17,8 +17,8 @@ state_machine:
       lane_end_tolerance_m: 0.25
       target_total_rotation_deg: 360.0
       lane_delta_theta_deg: 5.0
-      turner_angle_tolerance_deg: 0.5
-      index_overshoot_guard_deg: 2.0
+      turner_angle_tolerance_deg: 0.15
+      index_overshoot_guard_deg: 0.5
       settle_time_s: 2.0
       use_lawnmower_pattern: true
       use_tangential_indexing: true
@@ -35,31 +35,39 @@ state_machine:
       k_axial_lateral_i: 0.0
       axial_lateral_sign: 1.0   # cambia a -1.0 si el robot se aleja del fondo en vez de volver
       max_axial_lateral_integral_deg_s: 30.0
-      align_linear_speed_mps: 0.02
-      align_max_angular_z_rad_s: 0.15
-      k_align_heading_p: 0.5
-      k_align_lateral_p: 0.8
+      align_linear_speed_mps: 0.01
+      align_max_angular_z_rad_s: 0.05
+      k_align_heading_p: 0.35
+      k_align_lateral_p: 2.0
       k_align_lateral_i: 0.0
       align_lateral_sign: 1.0
       max_align_lateral_integral_deg_s: 30.0
-      turner_speed_rad_s: 0.02
+      turner_speed_rad_s: 0.05
       publish_rate_hz: 30.0
       rotate_angular_speed_rad_s: 0.30
-      rotate_yaw_tolerance_deg: 5.0
+      rotate_yaw_tolerance_deg: 2.0
       k_rotate_yaw_p: 1.0
       k_rotate_yaw_i: 0.0
       max_rotate_yaw_integral_deg_s: 30.0
       tube_radius_m: 3.925
-      index_compensation_sign: 1.0
+      index_compensation_gain: 0.0
+      index_compensation_sign: -1.0
       max_index_linear_speed_mps: 0.45
       k_index_lateral_p: 0.0
       k_index_lateral_i: 0.0
+      index_lateral_sign: 1.0
 
     safety:
       max_odom_age_s: 2.0
       max_turner_age_s: 2.0
       max_flags_age_s: 2.0
-      align_lock_hold_s: 1.0
+      align_lock_hold_s: 1.5
       require_bottom_lane_lock: true
       require_safe_to_scan_for_axial: true
       require_safe_to_index_tube: true
+      abort_index_on_bottom_loss: false
+      index_bottom_loss_grace_s: 1.0
+      align_max_lateral_angle_deg: 0.7
+      align_yaw_tolerance_deg: 1.5
+      align_yaw_lateral_capture_deg: 5.0
+      align_yaw_reacquire_deg: 15.0

@@ -146,6 +146,16 @@ class StabilityMonitorNode(Node):
         self.declare_parameter('bottom_lane.max_pitch_deg', 5.0)
         self.declare_parameter('bottom_lane.max_lateral_angle_deg', 5.0)
         self.declare_parameter('bottom_lane.max_accel_error', 1.0)
+        # How to compute lateral_angle_deg from IMU orientation.
+        # - 'roll': abs(roll_deg)
+        # - 'pitch': abs(pitch_deg)
+        # - 'tilt': sqrt(roll_deg^2 + pitch_deg^2)
+        self.declare_parameter('bottom_lane.lateral_angle_mode', 'roll')
+
+        # If true, bottom-lane lock ignores pitch. Pitch can legitimately spike
+        # during in-place yaw rotations due to contact/IMU mounting dynamics,
+        # but that does not necessarily mean the robot left the bottom lane.
+        self.declare_parameter('bottom_lane.ignore_pitch_for_lock', True)
 
         self.declare_parameter('geometry.min_wall_points', 300)
         self.declare_parameter('geometry.max_fit_rms', 0.35)
@@ -189,6 +199,14 @@ class StabilityMonitorNode(Node):
         self._max_accel_error = self.get_parameter(
             'bottom_lane.max_accel_error').value
 
+        self._lateral_angle_mode = str(
+            self.get_parameter('bottom_lane.lateral_angle_mode').value
+        ).strip().lower()
+
+        self._ignore_pitch_for_lock = bool(
+            self.get_parameter('bottom_lane.ignore_pitch_for_lock').value
+        )
+
         self._min_wall_points = self.get_parameter(
             'geometry.min_wall_points').value
         self._max_fit_rms = self.get_parameter('geometry.max_fit_rms').value
@@ -229,8 +247,16 @@ class StabilityMonitorNode(Node):
         ay = msg.linear_acceleration.y
         az = msg.linear_acceleration.z
         accel_norm = math.sqrt(ax * ax + ay * ay + az * az)
-        raw_lateral_angle = math.degrees(
-            math.atan2(math.sqrt(ax * ax + ay * ay), abs(az)))
+        # "Lateral angle" is intended to represent bottom-lane deviation.
+        # Using the accelerometer directly flaps during yaw rotations due to
+        # non-gravitational accelerations. Prefer orientation-derived signals.
+        mode = getattr(self, '_lateral_angle_mode', 'roll')
+        if mode == 'pitch':
+            raw_lateral_angle = abs(raw_pitch_deg)
+        elif mode == 'tilt':
+            raw_lateral_angle = math.sqrt(raw_roll_deg * raw_roll_deg + raw_pitch_deg * raw_pitch_deg)
+        else:
+            raw_lateral_angle = abs(raw_roll_deg)
 
         wx = msg.angular_velocity.x
         wy = msg.angular_velocity.y
@@ -320,10 +346,18 @@ class StabilityMonitorNode(Node):
 
         imu_ok = False
         if imu_fresh:
+            # Bottom-lane lock is primarily about gravity alignment to the
+            # cylinder generatrix (lateral angle) and overall stability.
+            # Pitch is optionally ignored for lock to avoid flapping during
+            # yaw rotations.
+            pitch_ok = (
+                True if self._ignore_pitch_for_lock
+                else abs(self._imu.pitch_deg) <= self._max_pitch_deg
+            )
             imu_ok = (
                 self._imu_calibrated and
                 abs(self._imu.roll_deg) <= self._max_roll_deg and
-                abs(self._imu.pitch_deg) <= self._max_pitch_deg and
+                pitch_ok and
                 self._imu.lateral_angle_deg <= self._max_lateral_angle_deg and
                 abs(self._imu.accel_norm - GRAVITY) <= self._max_accel_error
             )

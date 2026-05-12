@@ -27,6 +27,9 @@ RETURN_TO_BOTTOM_LANE = 'RETURN_TO_BOTTOM_LANE'
 WAIT_SAFE_TO_INDEX = 'WAIT_SAFE_TO_INDEX'
 ROTATE_TO_TANGENTIAL = 'ROTATE_TO_TANGENTIAL'
 INDEX_TUBE = 'INDEX_TUBE'
+RECOVER_BOTTOM_AFTER_INDEX = 'RECOVER_BOTTOM_AFTER_INDEX'
+DESCEND_TO_BOTTOM_LANE = 'DESCEND_TO_BOTTOM_LANE'
+REALIGN_AXIAL_YAW = 'REALIGN_AXIAL_YAW'
 ROTATE_TO_AXIAL = 'ROTATE_TO_AXIAL'
 VERIFY_INDEXED_POSITION = 'VERIFY_INDEXED_POSITION'
 FINISH = 'FINISH'
@@ -39,6 +42,8 @@ class OdomState:
     x_m: float
     y_m: float
     yaw_rad: float
+    linear_speed_mps: float
+    yaw_rate_rad_s: float
 
 
 @dataclass
@@ -102,7 +107,10 @@ class InspectionStateMachineNode(Node):
         self._index_error_integral = 0.0
         self._last_index_base_cmd_mps = 0.0
         self._last_turner_cmd_rad_s = 0.0
+        self._last_index_surface_speed_mps = 0.0
+        self._last_index_lateral_correction_mps = 0.0
         self._index_motion_committed = False
+        self._index_bottom_loss_start_s: Optional[float] = None
         self._yaw_error_integral = 0.0
         self._last_yaw_error_deg = 0.0
         self._last_yaw_cmd_rad_s = 0.0
@@ -111,12 +119,25 @@ class InspectionStateMachineNode(Node):
         self._last_axial_heading_error_deg = 0.0
         self._last_axial_lateral_error_deg = 0.0
         self._last_axial_cmd_rad_s = 0.0
+        self._last_axial_mode = 'idle'
         self._align_lateral_error_integral = 0.0
         self._align_lock_start_s: Optional[float] = None
         self._last_align_heading_error_deg = 0.0
         self._last_align_lateral_error_deg = 0.0
+        self._last_align_ready = False
+        self._last_align_ready_reason = 'not_evaluated'
+        self._last_align_mode = 'idle'
         self._last_align_linear_cmd_mps = 0.0
         self._last_align_cmd_rad_s = 0.0
+        self._align_force_yaw_phase = False
+        self._align_post_axial_phase: Optional[str] = None
+        self._align_target_yaw_override_rad: Optional[float] = None
+        self._recover_bottom_lock_start_s: Optional[float] = None
+        self._last_recover_bottom_ready = False
+        self._last_recover_bottom_reason = 'not_evaluated'
+        self._descend_lock_start_s: Optional[float] = None
+        self._last_descend_ready = False
+        self._last_descend_reason = 'not_evaluated'
 
         self._odom: Optional[OdomState] = None
         self._turner: Optional[TurnerState] = None
@@ -139,6 +160,8 @@ class InspectionStateMachineNode(Node):
             String, '/inspection/mission_status', 10)
         self._pub_autonomous_active = self.create_publisher(
             Bool, '/inspection/autonomous_active', 10)
+        self._pub_control_debug = self.create_publisher(
+            String, '/inspection/control_debug', 10)
 
         self.create_subscription(Odometry, self._odom_topic, self._odom_cb, 10)
         self.create_subscription(
@@ -161,6 +184,10 @@ class InspectionStateMachineNode(Node):
             f'auto_start={self._auto_start}, lane_delta={self._lane_delta_theta_deg}deg, '
             f'x=[{self._x_min_m}, {self._x_max_m}]m, axial_speed={self._axial_speed_mps}m/s'
         )
+
+        # Debug cache for /inspection/control_debug. This is observability only and
+        # does not affect control outputs.
+        self._last_control_debug = None
 
     def _declare_parameters(self):
         self.declare_parameter('auto_start', False)
@@ -196,29 +223,34 @@ class InspectionStateMachineNode(Node):
         self.declare_parameter('control.k_axial_heading_p', 0.8)
         self.declare_parameter('control.k_axial_heading_i', 0.0)
         self.declare_parameter('control.max_axial_heading_integral_deg_s', 30.0)
-        self.declare_parameter('control.k_axial_lateral_p', 0.0)
-        self.declare_parameter('control.k_axial_lateral_i', 0.0)
+        self.declare_parameter('control.k_axial_lateral_p', 1.0)
+        self.declare_parameter('control.k_axial_lateral_i', 0.15)
         self.declare_parameter('control.axial_lateral_sign', 1.0)
         self.declare_parameter('control.max_axial_lateral_integral_deg_s', 30.0)
-        self.declare_parameter('control.align_linear_speed_mps', 0.02)
-        self.declare_parameter('control.align_max_angular_z_rad_s', 0.15)
-        self.declare_parameter('control.k_align_heading_p', 0.5)
-        self.declare_parameter('control.k_align_lateral_p', 0.8)
+        self.declare_parameter('control.axial_yaw_priority_deg', 2.0)
+        self.declare_parameter('control.align_linear_speed_mps', 0.01)
+        self.declare_parameter('control.align_max_angular_z_rad_s', 0.05)
+        self.declare_parameter('control.k_align_heading_p', 0.35)
+        self.declare_parameter('control.k_align_lateral_p', 2.0)
         self.declare_parameter('control.k_align_lateral_i', 0.0)
         self.declare_parameter('control.align_lateral_sign', 1.0)
         self.declare_parameter('control.max_align_lateral_integral_deg_s', 30.0)
         self.declare_parameter('control.turner_speed_rad_s', 0.02)
         self.declare_parameter('control.publish_rate_hz', 10.0)
         self.declare_parameter('control.rotate_angular_speed_rad_s', 0.30)
-        self.declare_parameter('control.rotate_yaw_tolerance_deg', 5.0)
+        self.declare_parameter('control.rotate_yaw_tolerance_deg', 2.0)
         self.declare_parameter('control.k_rotate_yaw_p', 1.0)
         self.declare_parameter('control.k_rotate_yaw_i', 0.0)
         self.declare_parameter('control.max_rotate_yaw_integral_deg_s', 30.0)
+        self.declare_parameter('control.k_rotate_lateral_p', 0.5)
         self.declare_parameter('control.tube_radius_m', 3.925)
+        self.declare_parameter('control.index_compensation_gain', 1.0)
         self.declare_parameter('control.index_compensation_sign', 1.0)
+        self.declare_parameter('control.index_compensation_alternate_by_lane', True)
         self.declare_parameter('control.max_index_linear_speed_mps', 0.45)
         self.declare_parameter('control.k_index_lateral_p', 0.0)
         self.declare_parameter('control.k_index_lateral_i', 0.0)
+        self.declare_parameter('control.index_lateral_sign', 1.0)
 
         self.declare_parameter('safety.max_odom_age_s', 0.5)
         self.declare_parameter('safety.max_turner_age_s', 1.0)
@@ -227,7 +259,22 @@ class InspectionStateMachineNode(Node):
         self.declare_parameter('safety.require_bottom_lane_lock', True)
         self.declare_parameter('safety.require_safe_to_scan_for_axial', True)
         self.declare_parameter('safety.require_safe_to_index_tube', True)
-        self.declare_parameter('safety.align_lock_hold_s', 1.0)
+        self.declare_parameter('safety.abort_index_on_bottom_loss', False)
+        self.declare_parameter('safety.index_bottom_loss_grace_s', 1.0)
+        self.declare_parameter('safety.recover_bottom_hold_s', 1.0)
+        self.declare_parameter('safety.recover_bottom_require_pitch', False)
+        self.declare_parameter('safety.recover_bottom_max_roll_deg', 0.7)
+        self.declare_parameter('safety.recover_bottom_max_pitch_deg', 1.0)
+        self.declare_parameter('safety.recover_bottom_max_lateral_angle_deg', 0.7)
+        self.declare_parameter('safety.recover_bottom_max_linear_speed_mps', 0.01)
+        self.declare_parameter('safety.recover_bottom_max_yaw_rate_rad_s', 0.02)
+        self.declare_parameter('safety.descend_bottom_hold_s', 1.0)
+        self.declare_parameter('safety.descend_bottom_max_lateral_angle_deg', 0.7)
+        self.declare_parameter('safety.align_lock_hold_s', 1.5)
+        self.declare_parameter('safety.align_max_lateral_angle_deg', 0.7)
+        self.declare_parameter('safety.align_yaw_tolerance_deg', 1.5)
+        self.declare_parameter('safety.align_yaw_lateral_capture_deg', 5.0)
+        self.declare_parameter('safety.align_yaw_reacquire_deg', 15.0)
 
     def _load_parameters(self):
         self._auto_start = bool(self.get_parameter('auto_start').value)
@@ -289,6 +336,8 @@ class InspectionStateMachineNode(Node):
             self.get_parameter('control.axial_lateral_sign').value)
         self._max_axial_lateral_integral_rad_s = math.radians(abs(float(
             self.get_parameter('control.max_axial_lateral_integral_deg_s').value)))
+        self._axial_yaw_priority_deg = float(
+            self.get_parameter('control.axial_yaw_priority_deg').value)
         self._align_linear_speed_mps = abs(float(
             self.get_parameter('control.align_linear_speed_mps').value))
         self._align_max_angular_z_rad_s = abs(float(
@@ -317,15 +366,23 @@ class InspectionStateMachineNode(Node):
             self.get_parameter('control.k_rotate_yaw_i').value)
         self._max_rotate_yaw_integral_rad_s = math.radians(abs(float(
             self.get_parameter('control.max_rotate_yaw_integral_deg_s').value)))
+        self._k_rotate_lateral_p = float(
+            self.get_parameter('control.k_rotate_lateral_p').value)
         self._tube_radius_m = float(self.get_parameter('control.tube_radius_m').value)
+        self._index_compensation_gain = float(
+            self.get_parameter('control.index_compensation_gain').value)
         self._index_compensation_sign = float(
             self.get_parameter('control.index_compensation_sign').value)
+        self._index_compensation_alternate_by_lane = bool(
+            self.get_parameter('control.index_compensation_alternate_by_lane').value)
         self._max_index_linear_speed_mps = abs(float(
             self.get_parameter('control.max_index_linear_speed_mps').value))
         self._k_index_lateral_p = float(
             self.get_parameter('control.k_index_lateral_p').value)
         self._k_index_lateral_i = float(
             self.get_parameter('control.k_index_lateral_i').value)
+        self._index_lateral_sign = float(
+            self.get_parameter('control.index_lateral_sign').value)
 
         self._max_odom_age_s = float(
             self.get_parameter('safety.max_odom_age_s').value)
@@ -341,21 +398,121 @@ class InspectionStateMachineNode(Node):
             self.get_parameter('safety.require_safe_to_scan_for_axial').value)
         self._require_safe_to_index = bool(
             self.get_parameter('safety.require_safe_to_index_tube').value)
+        self._abort_index_on_bottom_loss = bool(
+            self.get_parameter('safety.abort_index_on_bottom_loss').value)
+        self._index_bottom_loss_grace_s = float(
+            self.get_parameter('safety.index_bottom_loss_grace_s').value)
+        self._recover_bottom_hold_s = float(
+            self.get_parameter('safety.recover_bottom_hold_s').value)
+        self._recover_bottom_require_pitch = bool(
+            self.get_parameter('safety.recover_bottom_require_pitch').value)
+        self._recover_bottom_max_roll_deg = float(
+            self.get_parameter('safety.recover_bottom_max_roll_deg').value)
+        self._recover_bottom_max_pitch_deg = float(
+            self.get_parameter('safety.recover_bottom_max_pitch_deg').value)
+        self._recover_bottom_max_lateral_angle_deg = float(
+            self.get_parameter('safety.recover_bottom_max_lateral_angle_deg').value)
+        self._recover_bottom_max_linear_speed_mps = float(
+            self.get_parameter('safety.recover_bottom_max_linear_speed_mps').value)
+        self._recover_bottom_max_yaw_rate_rad_s = float(
+            self.get_parameter('safety.recover_bottom_max_yaw_rate_rad_s').value)
+        self._descend_bottom_hold_s = float(
+            self.get_parameter('safety.descend_bottom_hold_s').value)
+        self._descend_bottom_max_lateral_angle_deg = float(
+            self.get_parameter('safety.descend_bottom_max_lateral_angle_deg').value)
         self._align_lock_hold_s = float(
             self.get_parameter('safety.align_lock_hold_s').value)
+        self._align_max_lateral_angle_deg = float(
+            self.get_parameter('safety.align_max_lateral_angle_deg').value)
+        self._align_yaw_tolerance_deg = float(
+            self.get_parameter('safety.align_yaw_tolerance_deg').value)
+        self._align_yaw_lateral_capture_deg = float(
+            self.get_parameter('safety.align_yaw_lateral_capture_deg').value)
+        self._align_yaw_reacquire_deg = float(
+            self.get_parameter('safety.align_yaw_reacquire_deg').value)
 
     def _now_s(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
+
+    def _publish_control_debug(self, controllers: list[dict], *, cmd_linear_x: float, cmd_angular_z: float):
+        # Keep payload compact: one JSON per tick with a controllers list.
+        yaw_deg = math.degrees(self._odom.yaw_rad) if self._odom is not None else None
+        target_yaw_rad = None
+        try:
+            if self._odom is not None:
+                target_yaw_rad = self._current_align_target_yaw()
+        except Exception:
+            target_yaw_rad = None
+        payload = {
+            'state': self._state,
+            'controllers': controllers,
+            'dt': 1.0 / self._publish_rate_hz,
+            'bottom_lane_locked': (
+                self._bottom_lane_locked.value
+                if self._bottom_lane_locked is not None else None
+            ),
+            'safe_to_scan': (
+                self._safe_to_scan.value
+                if self._safe_to_scan is not None else None
+            ),
+            'safe_to_index_tube': (
+                self._safe_to_index_tube.value
+                if self._safe_to_index_tube is not None else None
+            ),
+            'cmd_linear_x': float(cmd_linear_x),
+            'cmd_angular_z': float(cmd_angular_z),
+            'recover_bottom_ready': self._last_recover_bottom_ready,
+            'recover_bottom_reason': self._last_recover_bottom_reason,
+            'angles_deg': {
+                'yaw': yaw_deg,
+                'roll': (
+                    float(self._stability.roll_deg)
+                    if self._stability is not None else None
+                ),
+                'pitch': (
+                    float(self._stability.pitch_deg)
+                    if self._stability is not None else None
+                ),
+                'lateral_angle': (
+                    float(self._stability.lateral_angle_deg)
+                    if self._stability is not None else None
+                ),
+            },
+            'targets_deg': {
+                'align_yaw': (
+                    math.degrees(target_yaw_rad)
+                    if target_yaw_rad is not None else None
+                ),
+                'axial_yaw': (
+                    math.degrees(self._axial_yaw_target_rad)
+                    if self._axial_yaw_target_rad is not None else None
+                ),
+                'tangential_yaw': (
+                    math.degrees(self._tangential_yaw_target_rad)
+                    if self._tangential_yaw_target_rad is not None else None
+                ),
+            },
+        }
+        # Avoid publishing identical payloads repeatedly if a state is holding.
+        compact = json.dumps(payload, separators=(',', ':'), ensure_ascii=True)
+        if compact == self._last_control_debug:
+            return
+        self._last_control_debug = compact
+        self._pub_control_debug.publish(String(data=compact))
 
     def _fresh(self, state, max_age_s: float) -> bool:
         return state is not None and (self._now_s() - state.stamp_s) <= max_age_s
 
     def _odom_cb(self, msg: Odometry):
+        vx = float(msg.twist.twist.linear.x)
+        vy = float(msg.twist.twist.linear.y)
         self._odom = OdomState(
             stamp_s=self._now_s(),
             x_m=float(msg.pose.pose.position.x),
             y_m=float(msg.pose.pose.position.y),
             yaw_rad=_quat_to_yaw(msg.pose.pose.orientation),
+            linear_speed_mps=math.sqrt(vx * vx + vy * vy),
+            yaw_rate_rad_s=abs(float(msg.twist.twist.angular.z)),
         )
 
     def _turner_cb(self, msg: Float64):
@@ -412,6 +569,16 @@ class InspectionStateMachineNode(Node):
         self._reset_yaw_control()
         self._reset_axial_control()
         self._reset_align_control()
+        self._align_force_yaw_phase = False
+        self._align_post_axial_phase = None
+        self._align_target_yaw_override_rad = None
+        self._recover_bottom_lock_start_s = None
+        self._last_recover_bottom_ready = False
+        self._last_recover_bottom_reason = 'not_evaluated'
+        self._descend_lock_start_s = None
+        self._last_descend_ready = False
+        self._last_descend_reason = 'not_evaluated'
+        self._last_control_debug = None
 
     def _bottom_lane_cb(self, msg: Bool):
         self._bottom_lane_locked = FlagState(self._now_s(), bool(msg.data))
@@ -425,6 +592,7 @@ class InspectionStateMachineNode(Node):
     def _transition(self, new_state: str, reason: str):
         if self._state == new_state:
             return
+        old_state = self._state
         self.get_logger().info(f'{self._state} -> {new_state}: {reason}')
         self._state = new_state
         self._last_transition_reason = reason
@@ -434,8 +602,58 @@ class InspectionStateMachineNode(Node):
             self._reset_yaw_control()
         if new_state == AXIAL_SCAN:
             self._reset_axial_control()
-        if new_state == ALIGN_TO_BOTTOM_LANE:
+        if new_state in (ALIGN_TO_BOTTOM_LANE, RECOVER_BOTTOM_AFTER_INDEX):
             self._reset_align_control()
+            self._align_target_yaw_override_rad = None
+            # After ROTATE_TO_AXIAL, use an explicit sequence:
+            # 1) settle yaw, 2) recover lateral alignment, 3) hold ready.
+            if new_state == ALIGN_TO_BOTTOM_LANE and old_state == ROTATE_TO_AXIAL:
+                self._align_force_yaw_phase = True
+                self._align_post_axial_phase = 'yaw'
+            elif new_state == RECOVER_BOTTOM_AFTER_INDEX:
+                self._align_force_yaw_phase = False
+                self._align_post_axial_phase = 'lateral'
+                self._align_target_yaw_override_rad = self._tangential_yaw_target_rad
+            else:
+                self._align_force_yaw_phase = False
+                self._align_post_axial_phase = None
+        if new_state == DESCEND_TO_BOTTOM_LANE:
+            self._reset_align_control()
+            self._descend_lock_start_s = None
+            self._last_descend_ready = False
+            self._last_descend_reason = 'not_evaluated'
+            self._align_target_yaw_override_rad = self._current_realign_target_yaw()
+        elif old_state == ALIGN_TO_BOTTOM_LANE:
+            self._align_force_yaw_phase = False
+            self._align_post_axial_phase = None
+            self._align_target_yaw_override_rad = None
+        elif old_state == RECOVER_BOTTOM_AFTER_INDEX:
+            self._align_force_yaw_phase = False
+            self._align_post_axial_phase = None
+            self._align_target_yaw_override_rad = None
+            self._recover_bottom_lock_start_s = None
+        elif old_state == DESCEND_TO_BOTTOM_LANE:
+            self._descend_lock_start_s = None
+
+    def _current_align_target_yaw(self) -> float:
+        if self._align_target_yaw_override_rad is not None:
+            return self._align_target_yaw_override_rad
+        return (
+            self._axial_yaw_target_rad
+            if self._axial_yaw_target_rad is not None else self._odom.yaw_rad
+        )
+
+    def _current_realign_target_yaw(self) -> float:
+        if self._axial_yaw_target_rad is not None:
+            return self._axial_yaw_target_rad
+        if self._desired_yaw_rad is not None:
+            return self._desired_yaw_rad
+        return self._odom.yaw_rad if self._odom is not None else 0.0
+
+    def _signed_bottom_error_rad(self) -> float:
+        if not self._fresh(self._stability, self._max_stability_age_s):
+            return 0.0
+        return math.radians(self._stability.roll_deg)
 
     def _signals_ready(self) -> bool:
         self._last_input_failure = self._input_freshness()
@@ -486,7 +704,11 @@ class InspectionStateMachineNode(Node):
     def _prepare_lane(self):
         if self._lane_target_position_m is not None:
             return
-        if self._use_lawnmower_pattern:
+        if self._use_tangential_indexing:
+            # In tangential indexing the robot physically turns 180 deg between
+            # lanes, so it should always drive forward in its own base frame.
+            self._lane_direction = 1.0
+        elif self._use_lawnmower_pattern:
             self._lane_direction = 1.0 if self._lane_id % 2 == 0 else -1.0
         else:
             self._lane_direction = 1.0
@@ -494,7 +716,12 @@ class InspectionStateMachineNode(Node):
         self._lane_target_position_m = (
             self._lane_start_position_m + self._lane_direction * self._lane_length_m
         )
-        self._desired_yaw_rad = self._odom.yaw_rad
+        # Preserve the intended axial heading when it was already computed by
+        # the previous maneuver sequence (for example after tangential indexing).
+        # Otherwise AXIAL_SCAN would lock onto the current, slightly wrong yaw
+        # and carry that bias for the whole lane.
+        if self._desired_yaw_rad is None:
+            self._desired_yaw_rad = self._odom.yaw_rad
         self._axial_yaw_target_rad = self._desired_yaw_rad
         self._reset_axial_control()
 
@@ -523,12 +750,18 @@ class InspectionStateMachineNode(Node):
         self._index_error_integral = 0.0
         self._last_index_base_cmd_mps = 0.0
         self._last_turner_cmd_rad_s = 0.0
+        self._last_index_surface_speed_mps = 0.0
+        self._last_index_lateral_correction_mps = 0.0
         self._index_motion_committed = False
+        self._index_bottom_loss_start_s = None
 
     def _prepare_tangential_rotation(self):
         if self._odom is None:
             return
-        self._axial_yaw_target_rad = self._desired_yaw_rad or self._odom.yaw_rad
+        if self._desired_yaw_rad is not None:
+            self._axial_yaw_target_rad = self._desired_yaw_rad
+        elif self._axial_yaw_target_rad is None:
+            self._axial_yaw_target_rad = self._odom.yaw_rad
         # Tangential offset is always in the same world direction regardless of
         # lane direction. The lawnmower reverses linear_x, not the heading.
         self._tangential_yaw_target_rad = _wrap_pi(
@@ -536,11 +769,14 @@ class InspectionStateMachineNode(Node):
         )
 
     def _prepare_next_axial_rotation(self):
-        # Axial heading stays constant across lanes. lane_direction controls
-        # the sign of linear_x in AXIAL_SCAN so the robot reverses without
-        # turning around. Both tangential rotations are therefore always in
-        # the same angular direction.
-        pass
+        if self._tangential_yaw_target_rad is None:
+            return
+        # The second 90 deg rotation must continue in the same direction as
+        # ROTATE_TO_TANGENTIAL, leaving the base 180 deg from the previous lane.
+        self._axial_yaw_target_rad = _wrap_pi(
+            self._tangential_yaw_target_rad + self._tangential_yaw_offset_rad
+        )
+        self._desired_yaw_rad = self._axial_yaw_target_rad
 
     def _reset_yaw_control(self):
         self._yaw_error_integral = 0.0
@@ -553,32 +789,144 @@ class InspectionStateMachineNode(Node):
         self._last_axial_heading_error_deg = 0.0
         self._last_axial_lateral_error_deg = 0.0
         self._last_axial_cmd_rad_s = 0.0
+        self._last_axial_mode = 'idle'
 
     def _reset_align_control(self):
         self._align_lateral_error_integral = 0.0
         self._align_lock_start_s = None
         self._last_align_heading_error_deg = 0.0
         self._last_align_lateral_error_deg = 0.0
+        self._last_align_ready = False
+        self._last_align_ready_reason = 'not_evaluated'
+        self._last_align_mode = 'idle'
         self._last_align_linear_cmd_mps = 0.0
         self._last_align_cmd_rad_s = 0.0
 
+    def _recover_bottom_ready(self) -> bool:
+        if self._odom is None:
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'missing_odom'
+            return False
+        if not self._fresh(self._stability, self._max_stability_age_s):
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'missing_stability'
+            return False
+        if not self._bottom_locked():
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'bottom_not_locked'
+            return False
+        if abs(self._stability.roll_deg) > self._recover_bottom_max_roll_deg:
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'roll_error'
+            return False
+        if (
+            self._recover_bottom_require_pitch and
+            abs(self._stability.pitch_deg) > self._recover_bottom_max_pitch_deg
+        ):
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'pitch_error'
+            return False
+        if abs(self._stability.lateral_angle_deg) > self._recover_bottom_max_lateral_angle_deg:
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'lateral_error'
+            return False
+        if self._odom.linear_speed_mps > self._recover_bottom_max_linear_speed_mps:
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'linear_speed'
+            return False
+        if self._odom.yaw_rate_rad_s > self._recover_bottom_max_yaw_rate_rad_s:
+            self._last_recover_bottom_ready = False
+            self._last_recover_bottom_reason = 'yaw_rate'
+            return False
+        self._last_recover_bottom_ready = True
+        self._last_recover_bottom_reason = 'ready'
+        return True
+
+    def _recover_bottom_ready_for_hold_time(self) -> bool:
+        if self._recover_bottom_ready():
+            if self._recover_bottom_lock_start_s is None:
+                self._recover_bottom_lock_start_s = self._now_s()
+            return self._now_s() - self._recover_bottom_lock_start_s >= self._recover_bottom_hold_s
+        self._recover_bottom_lock_start_s = None
+        return False
+
+    def _descend_bottom_ready(self) -> bool:
+        if self._odom is None:
+            self._last_descend_ready = False
+            self._last_descend_reason = 'missing_odom'
+            return False
+        if not self._fresh(self._stability, self._max_stability_age_s):
+            self._last_descend_ready = False
+            self._last_descend_reason = 'missing_stability'
+            return False
+        lateral_error_deg = abs(self._stability.roll_deg)
+        if lateral_error_deg > self._descend_bottom_max_lateral_angle_deg:
+            self._last_descend_ready = False
+            self._last_descend_reason = 'lateral_error'
+            return False
+        self._last_descend_ready = True
+        self._last_descend_reason = 'ready'
+        return True
+
+    def _descend_bottom_ready_for_hold_time(self) -> bool:
+        if self._descend_bottom_ready():
+            if self._descend_lock_start_s is None:
+                self._descend_lock_start_s = self._now_s()
+            return self._now_s() - self._descend_lock_start_s >= self._descend_bottom_hold_s
+        self._descend_lock_start_s = None
+        return False
+
+    def _current_index_compensation_sign(self) -> float:
+        sign = self._index_compensation_sign
+        if self._index_compensation_alternate_by_lane and (self._lane_id % 2 == 1):
+            sign *= -1.0
+        return sign
+
     def _alignment_locked_for_hold_time(self) -> bool:
-        if self._scan_allowed():
+        if self._alignment_ready():
             if self._align_lock_start_s is None:
                 self._align_lock_start_s = self._now_s()
             return self._now_s() - self._align_lock_start_s >= self._align_lock_hold_s
         self._align_lock_start_s = None
         return False
 
+    def _alignment_ready(self) -> bool:
+        # ALIGN_TO_BOTTOM_LANE is responsible for *recovering* bottom-lane lock.
+        # Gating readiness on `_scan_allowed()` (which depends on
+        # bottom_lane_locked / safe_to_scan) can create a circular dependency
+        # that prevents ever leaving ALIGN_TO_BOTTOM_LANE.
+        if self._odom is None:
+            self._last_align_ready = False
+            self._last_align_ready_reason = 'missing_odom'
+            return False
+
+        target_yaw = self._current_align_target_yaw()
+        heading_error_deg = abs(math.degrees(_wrap_pi(target_yaw - self._odom.yaw_rad)))
+        if heading_error_deg > self._align_yaw_tolerance_deg:
+            self._last_align_ready = False
+            self._last_align_ready_reason = 'yaw_error'
+            return False
+
+        if not self._fresh(self._stability, self._max_stability_age_s):
+            self._last_align_ready = False
+            self._last_align_ready_reason = 'missing_stability'
+            return False
+        lateral_error_deg = abs(self._stability.lateral_angle_deg)
+        if lateral_error_deg > self._align_max_lateral_angle_deg:
+            self._last_align_ready = False
+            self._last_align_ready_reason = 'lateral_error'
+            return False
+
+        self._last_align_ready = True
+        self._last_align_ready_reason = 'ready'
+        return True
+
     def _publish_align_to_bottom_lane_cmd(self):
         if self._odom is None:
             self._stop_base()
             return
         dt = 1.0 / self._publish_rate_hz
-        target_yaw = (
-            self._axial_yaw_target_rad
-            if self._axial_yaw_target_rad is not None else self._odom.yaw_rad
-        )
+        target_yaw = self._current_align_target_yaw()
         heading_error = _wrap_pi(target_yaw - self._odom.yaw_rad)
 
         lateral_error = 0.0
@@ -593,22 +941,207 @@ class InspectionStateMachineNode(Node):
             ),
         )
 
-        angular_z = (
-            self._k_align_heading_p * heading_error +
-            self._align_lateral_sign * (
-                self._k_align_lateral_p * lateral_error +
-                self._k_align_lateral_i * self._align_lateral_error_integral
-            )
+        lateral_cmd = self._align_lateral_sign * (
+            self._k_align_lateral_p * lateral_error +
+            self._k_align_lateral_i * self._align_lateral_error_integral
         )
+        heading_cmd = self._k_align_heading_p * heading_error
+
+        lateral_p = self._align_lateral_sign * (self._k_align_lateral_p * lateral_error)
+        lateral_i = self._align_lateral_sign * (self._k_align_lateral_i * self._align_lateral_error_integral)
+        lateral_u_raw = lateral_p + lateral_i
+        heading_p = heading_cmd
+
+        # If the robot is not sitting on the bottom lane, do not let yaw
+        # correction cancel the lateral recovery command. First recover the
+        # stable generatrix, then clean up yaw.
+        heading_error_deg = abs(math.degrees(heading_error))
+        lateral_error_deg = abs(math.degrees(lateral_error))
+        if self._align_post_axial_phase == 'yaw' and heading_error_deg <= self._align_yaw_tolerance_deg:
+            self._align_force_yaw_phase = False
+            self._align_post_axial_phase = 'lateral'
+        if self._align_post_axial_phase == 'lateral' and lateral_error_deg <= self._align_max_lateral_angle_deg:
+            self._align_post_axial_phase = None
+
+        if heading_error_deg > self._align_yaw_reacquire_deg:
+            angular_z = heading_cmd
+            linear_x = 0.0
+            self._last_align_mode = 'yaw_reacquire'
+        elif self._align_post_axial_phase == 'yaw' and heading_error_deg > self._align_yaw_tolerance_deg:
+            angular_z = heading_cmd
+            linear_x = 0.0
+            self._last_align_mode = 'yaw_capture_forced'
+        elif self._align_post_axial_phase == 'lateral' and lateral_error_deg > self._align_max_lateral_angle_deg:
+            angular_z = lateral_cmd
+            linear_x = self._align_linear_speed_mps
+            self._last_align_mode = 'lateral_capture_forced'
+        elif (
+            lateral_error_deg > self._align_max_lateral_angle_deg and
+            heading_error_deg <= self._align_yaw_lateral_capture_deg
+        ):
+            # During lateral capture, prioritize recovering the bottom-lane
+            # generatrix. Mixing heading correction here can weaken or even
+            # oppose the lateral recovery when yaw is still non-zero after the
+            # axial rotation.
+            angular_z = lateral_cmd
+            linear_x = self._align_linear_speed_mps
+            self._last_align_mode = 'lateral_capture'
+        elif heading_error_deg > self._align_yaw_tolerance_deg:
+            angular_z = heading_cmd
+            linear_x = 0.0
+            self._last_align_mode = 'yaw_capture'
+        else:
+            angular_z = 0.0
+            linear_x = 0.0
+            self._last_align_mode = 'hold_ready'
         angular_z = max(
             -self._align_max_angular_z_rad_s,
             min(self._align_max_angular_z_rad_s, angular_z),
         )
+        angular_z_unsat = angular_z
+        # The clamp above already applied; infer saturation by recomputing unclamped.
+        # (Keep it simple: compare to pre-clamp candidates.)
+        # Note: angular_z here is the commanded output; lateral_u_raw is not directly
+        # applied when modes select yaw-only.
+        saturated = False
+        if self._last_align_mode in ('yaw_reacquire', 'yaw_capture', 'yaw_capture_forced'):
+            saturated = abs(heading_cmd) > self._align_max_angular_z_rad_s
+        elif self._last_align_mode in ('lateral_capture', 'lateral_capture_forced'):
+            saturated = abs(lateral_cmd) > self._align_max_angular_z_rad_s
         self._last_align_heading_error_deg = math.degrees(heading_error)
         self._last_align_lateral_error_deg = math.degrees(lateral_error)
-        self._last_align_linear_cmd_mps = self._align_linear_speed_mps
+        self._last_align_linear_cmd_mps = linear_x
         self._last_align_cmd_rad_s = angular_z
-        self._publish_cmd_vel(self._align_linear_speed_mps, angular_z)
+        self._publish_cmd_vel(linear_x, angular_z)
+
+        controllers = [
+            {
+                'controller': 'align_heading_p',
+                'target': {'yaw_rad': float(target_yaw)},
+                'measured': {'yaw_rad': float(self._odom.yaw_rad)},
+                'error': float(heading_error),
+                'error_unit': 'rad',
+                'p': float(heading_p),
+                'i': 0.0,
+                'u_raw': float(heading_p),
+                'u_sat': float(angular_z) if self._last_align_mode in ('yaw_reacquire', 'yaw_capture', 'yaw_capture_forced') else None,
+                'integrator': None,
+                'integrator_unit': None,
+                'dt': float(dt),
+                'saturated': bool(saturated) if self._last_align_mode in ('yaw_reacquire', 'yaw_capture', 'yaw_capture_forced') else False,
+                'notes': f'mode={self._last_align_mode}',
+            },
+            {
+                'controller': 'align_lateral_pi',
+                'target': {'lateral_error_rad': 0.0},
+                'measured': {'lateral_error_rad': float(lateral_error)},
+                'error': float(lateral_error),
+                'error_unit': 'rad',
+                'p': float(lateral_p),
+                'i': float(lateral_i),
+                'u_raw': float(lateral_u_raw),
+                'u_sat': float(angular_z) if self._last_align_mode in ('lateral_capture', 'lateral_capture_forced') else None,
+                'integrator': float(self._align_lateral_error_integral),
+                'integrator_unit': 'rad*s',
+                'dt': float(dt),
+                'saturated': bool(saturated) if self._last_align_mode in ('lateral_capture', 'lateral_capture_forced') else False,
+                'notes': f'mode={self._last_align_mode}',
+            },
+        ]
+        self._publish_control_debug(controllers, cmd_linear_x=linear_x, cmd_angular_z=angular_z)
+
+    def _publish_descend_to_bottom_lane_cmd(self):
+        if self._odom is None:
+            self._stop_base()
+            return
+        dt = 1.0 / self._publish_rate_hz
+        target_yaw = self._current_realign_target_yaw()
+        heading_error = _wrap_pi(target_yaw - self._odom.yaw_rad)
+        lateral_error = self._signed_bottom_error_rad()
+
+        self._align_lateral_error_integral += lateral_error * dt
+        self._align_lateral_error_integral = max(
+            -self._max_align_lateral_integral_rad_s,
+            min(self._max_align_lateral_integral_rad_s, self._align_lateral_error_integral),
+        )
+
+        lateral_cmd = self._align_lateral_sign * (
+            self._k_align_lateral_p * lateral_error +
+            self._k_align_lateral_i * self._align_lateral_error_integral
+        )
+        heading_cmd = self._k_align_heading_p * heading_error
+        heading_error_deg = abs(math.degrees(heading_error))
+        lateral_error_deg = abs(math.degrees(lateral_error))
+
+        if lateral_error_deg > self._descend_bottom_max_lateral_angle_deg:
+            angular_z = lateral_cmd
+            linear_x = self._align_linear_speed_mps
+            self._last_align_mode = 'descend_bottom_lane'
+        elif heading_error_deg > self._align_yaw_tolerance_deg:
+            angular_z = heading_cmd
+            linear_x = 0.0
+            self._last_align_mode = 'descend_yaw_trim'
+        else:
+            angular_z = 0.0
+            linear_x = 0.0
+            self._last_align_mode = 'descend_hold_ready'
+
+        angular_z = max(
+            -self._align_max_angular_z_rad_s,
+            min(self._align_max_angular_z_rad_s, angular_z),
+        )
+        lateral_p = self._align_lateral_sign * (self._k_align_lateral_p * lateral_error)
+        lateral_i = self._align_lateral_sign * (self._k_align_lateral_i * self._align_lateral_error_integral)
+        saturated = False
+        if self._last_align_mode == 'descend_bottom_lane':
+            saturated = abs(lateral_cmd) > self._align_max_angular_z_rad_s
+        elif self._last_align_mode == 'descend_yaw_trim':
+            saturated = abs(heading_cmd) > self._align_max_angular_z_rad_s
+
+        self._last_align_heading_error_deg = math.degrees(heading_error)
+        self._last_align_lateral_error_deg = math.degrees(lateral_error)
+        self._last_align_linear_cmd_mps = linear_x
+        self._last_align_cmd_rad_s = angular_z
+        self._publish_cmd_vel(linear_x, angular_z)
+
+        controllers = [
+            {
+                'controller': 'descend_heading_p',
+                'target': {'yaw_rad': float(target_yaw)},
+                'measured': {'yaw_rad': float(self._odom.yaw_rad)},
+                'error': float(heading_error),
+                'error_unit': 'rad',
+                'p': float(heading_cmd),
+                'i': 0.0,
+                'u_raw': float(heading_cmd),
+                'u_sat': float(angular_z) if self._last_align_mode == 'descend_yaw_trim' else None,
+                'integrator': None,
+                'integrator_unit': None,
+                'dt': float(dt),
+                'saturated': bool(saturated) if self._last_align_mode == 'descend_yaw_trim' else False,
+                'notes': f'mode={self._last_align_mode}',
+            },
+            {
+                'controller': 'descend_lateral_pi',
+                'target': {'signed_bottom_error_rad': 0.0},
+                'measured': {
+                    'signed_bottom_error_rad': float(lateral_error),
+                    'roll_deg': float(self._stability.roll_deg) if self._stability is not None else None,
+                },
+                'error': float(lateral_error),
+                'error_unit': 'rad',
+                'p': float(lateral_p),
+                'i': float(lateral_i),
+                'u_raw': float(lateral_p + lateral_i),
+                'u_sat': float(angular_z) if self._last_align_mode == 'descend_bottom_lane' else None,
+                'integrator': float(self._align_lateral_error_integral),
+                'integrator_unit': 'rad*s',
+                'dt': float(dt),
+                'saturated': bool(saturated) if self._last_align_mode == 'descend_bottom_lane' else False,
+                'notes': f'mode={self._last_align_mode}',
+            },
+        ]
+        self._publish_control_debug(controllers, cmd_linear_x=linear_x, cmd_angular_z=angular_z)
 
     def _axial_scan_angular_command(self, target_yaw_rad: Optional[float]) -> float:
         if target_yaw_rad is None or self._odom is None:
@@ -625,9 +1158,7 @@ class InspectionStateMachineNode(Node):
             ),
         )
 
-        lateral_error = 0.0
-        if self._fresh(self._stability, self._max_stability_age_s):
-            lateral_error = math.radians(self._stability.lateral_angle_deg)
+        lateral_error = self._signed_bottom_error_rad()
         self._axial_lateral_error_integral += lateral_error * dt
         self._axial_lateral_error_integral = max(
             -self._max_axial_lateral_integral_rad_s,
@@ -637,14 +1168,18 @@ class InspectionStateMachineNode(Node):
             ),
         )
 
-        angular_z = (
-            self._k_axial_heading_p * heading_error +
-            self._k_axial_heading_i * self._axial_heading_error_integral +
-            self._axial_lateral_sign * (
-                self._k_axial_lateral_p * lateral_error +
-                self._k_axial_lateral_i * self._axial_lateral_error_integral
-            )
-        )
+        heading_p = self._k_axial_heading_p * heading_error
+        heading_i = self._k_axial_heading_i * self._axial_heading_error_integral
+        lateral_p = self._axial_lateral_sign * (self._k_axial_lateral_p * lateral_error)
+        lateral_i = self._axial_lateral_sign * (self._k_axial_lateral_i * self._axial_lateral_error_integral)
+        heading_error_deg = abs(math.degrees(heading_error))
+        if heading_error_deg > self._axial_yaw_priority_deg:
+            angular_z_raw = heading_p + heading_i
+            axial_mode = 'yaw_priority'
+        else:
+            angular_z_raw = heading_p + heading_i + lateral_p + lateral_i
+            axial_mode = 'coupled'
+        angular_z = angular_z_raw
         angular_z = max(
             -self._max_angular_z_rad_s,
             min(self._max_angular_z_rad_s, angular_z),
@@ -652,6 +1187,66 @@ class InspectionStateMachineNode(Node):
         self._last_axial_heading_error_deg = math.degrees(heading_error)
         self._last_axial_lateral_error_deg = math.degrees(lateral_error)
         self._last_axial_cmd_rad_s = angular_z
+        self._last_axial_mode = axial_mode
+
+        controllers = [
+            {
+                'controller': 'axial_heading_pi',
+                'target': {'yaw_rad': float(target_yaw_rad)},
+                'measured': {'yaw_rad': float(self._odom.yaw_rad)},
+                'error': float(heading_error),
+                'error_unit': 'rad',
+                'p': float(heading_p),
+                'i': float(heading_i),
+                'u_raw': float(heading_p + heading_i),
+                'u_sat': None,
+                'integrator': float(self._axial_heading_error_integral),
+                'integrator_unit': 'rad*s',
+                'dt': float(dt),
+                'saturated': False,
+                'notes': f'contributes_to_cmd_angular_z mode={axial_mode}',
+            },
+            {
+                'controller': 'axial_lateral_pi',
+                'target': {'lateral_error_rad': 0.0},
+                'measured': {
+                    'lateral_error_rad': float(lateral_error),
+                    'signed_roll_deg': (
+                        float(self._stability.roll_deg)
+                        if self._stability is not None else None
+                    ),
+                },
+                'error': float(lateral_error),
+                'error_unit': 'rad',
+                'p': float(lateral_p),
+                'i': float(lateral_i),
+                'u_raw': float(lateral_p + lateral_i),
+                'u_sat': None,
+                'integrator': float(self._axial_lateral_error_integral),
+                'integrator_unit': 'rad*s',
+                'dt': float(dt),
+                'saturated': False,
+                'notes': f'signed_lateral_error_from_stability_roll_deg_converted_to_rad mode={axial_mode}',
+            },
+            {
+                'controller': 'axial_sum',
+                'target': None,
+                'measured': None,
+                'error': None,
+                'error_unit': None,
+                'p': float(heading_p + lateral_p),
+                'i': float(heading_i + lateral_i),
+                'u_raw': float(angular_z_raw),
+                'u_sat': float(angular_z),
+                'integrator': None,
+                'integrator_unit': None,
+                'dt': float(dt),
+                'saturated': bool(abs(angular_z_raw) > self._max_angular_z_rad_s),
+                'notes': f'cmd_angular_z_after_clamp mode={axial_mode}',
+            },
+        ]
+        # cmd_linear_x is filled by the caller (AXIAL_SCAN) right after this.
+        self._pending_axial_debug = controllers
         return angular_z
 
     def _yaw_pi_command(self, target_yaw_rad: Optional[float]) -> Optional[float]:
@@ -665,16 +1260,38 @@ class InspectionStateMachineNode(Node):
             -self._max_rotate_yaw_integral_rad_s,
             min(self._max_rotate_yaw_integral_rad_s, self._yaw_error_integral),
         )
-        angular_z = (
-            self._k_rotate_yaw_p * error +
-            self._k_rotate_yaw_i * self._yaw_error_integral
-        )
+        p = self._k_rotate_yaw_p * error
+        i = self._k_rotate_yaw_i * self._yaw_error_integral
+        u_raw = p + i
         angular_z = max(
             -self._rotate_angular_speed_rad_s,
-            min(self._rotate_angular_speed_rad_s, angular_z),
+            min(self._rotate_angular_speed_rad_s, u_raw),
         )
         self._last_yaw_cmd_rad_s = angular_z
+
+        self._pending_yaw_debug = {
+            'controller': 'yaw_pi',
+            'target': {'yaw_rad': float(target_yaw_rad)},
+            'measured': {'yaw_rad': float(self._odom.yaw_rad)},
+            'error': float(error),
+            'error_unit': 'rad',
+            'p': float(p),
+            'i': float(i),
+            'u_raw': float(u_raw),
+            'u_sat': float(angular_z),
+            'integrator': float(self._yaw_error_integral),
+            'integrator_unit': 'rad*s',
+            'dt': float(dt),
+            'saturated': bool(abs(u_raw) > self._rotate_angular_speed_rad_s),
+            'notes': None,
+        }
         return angular_z
+
+    def _rotate_lateral_correction(self) -> float:
+        if not self._fresh(self._stability, self._max_stability_age_s):
+            return 0.0
+        signed_error = self._signed_bottom_error_rad()
+        return self._align_lateral_sign * self._k_rotate_lateral_p * signed_error
 
     def _rotate_to_yaw(self, target_yaw_rad: Optional[float]) -> bool:
         if target_yaw_rad is None or self._odom is None:
@@ -690,21 +1307,40 @@ class InspectionStateMachineNode(Node):
         if angular_z is None:
             self._stop_base()
             return False
-        self._publish_cmd_vel(0.0, angular_z)
+        angular_z_cmd = max(
+            -self._rotate_angular_speed_rad_s,
+            min(self._rotate_angular_speed_rad_s, angular_z + self._rotate_lateral_correction()),
+        )
+        self._publish_cmd_vel(0.0, angular_z_cmd)
+
+        ctrl = getattr(self, '_pending_yaw_debug', None)
+        if isinstance(ctrl, dict):
+            ctrl = dict(ctrl)
+            ctrl['controller'] = 'yaw_pi'
+            ctrl['notes'] = 'rotate_to_yaw_with_signed_lateral_correction'
+            self._publish_control_debug([ctrl], cmd_linear_x=0.0, cmd_angular_z=angular_z_cmd)
         return False
 
     def _publish_index_compensation(self, turner_velocity_rad_s: float):
         lateral_error_deg = 0.0
         if self._fresh(self._stability, self._max_stability_age_s):
-            lateral_error_deg = self._stability.lateral_angle_deg
+            lateral_error_deg = self._stability.roll_deg
         dt = 1.0 / self._publish_rate_hz
         self._index_error_integral += lateral_error_deg * dt
         surface_speed_mps = self._tube_radius_m * turner_velocity_rad_s
-        correction = (
-            self._k_index_lateral_p * lateral_error_deg +
-            self._k_index_lateral_i * self._index_error_integral
+        lateral_p = self._index_lateral_sign * (self._k_index_lateral_p * lateral_error_deg)
+        lateral_i = self._index_lateral_sign * (self._k_index_lateral_i * self._index_error_integral)
+        correction = lateral_p + lateral_i
+        compensation_sign = self._current_index_compensation_sign()
+        feedforward = (
+            compensation_sign *
+            self._index_compensation_gain *
+            surface_speed_mps
         )
-        linear_x = self._index_compensation_sign * surface_speed_mps + correction
+        linear_x = (
+            feedforward + correction
+        )
+        linear_x_raw = linear_x
         linear_x = max(
             -self._max_index_linear_speed_mps,
             min(self._max_index_linear_speed_mps, linear_x),
@@ -713,9 +1349,68 @@ class InspectionStateMachineNode(Node):
         angular_z = self._yaw_pi_command(yaw_target)
         if angular_z is None:
             angular_z = 0.0
+        self._last_index_surface_speed_mps = surface_speed_mps
+        self._last_index_lateral_correction_mps = correction
         self._last_index_base_cmd_mps = linear_x
         self._last_turner_cmd_rad_s = turner_velocity_rad_s
         self._publish_cmd_vel(linear_x, angular_z)
+
+        controllers = []
+        controllers.append({
+            'controller': 'index_feedforward',
+            'target': {'surface_speed_mps': float(surface_speed_mps)},
+            'measured': None,
+            'error': None,
+            'error_unit': None,
+            'p': None,
+            'i': None,
+            'u_raw': float(feedforward),
+            'u_sat': float(feedforward),
+            'integrator': None,
+            'integrator_unit': None,
+            'dt': float(dt),
+            'saturated': False,
+            'notes': f'u_raw = contextual_index_compensation_sign({compensation_sign}) * index_compensation_gain * (R * turner_w)',
+        })
+        controllers.append({
+            'controller': 'index_lateral_pi',
+            'target': {'lateral_error_deg': 0.0},
+            'measured': {'lateral_error_deg': float(lateral_error_deg)},
+            'error': float(lateral_error_deg),
+            'error_unit': 'deg',
+            'p': float(lateral_p),
+            'i': float(lateral_i),
+            'u_raw': float(correction),
+            'u_sat': float(correction),
+            'integrator': float(self._index_error_integral),
+            'integrator_unit': 'deg*s',
+            'dt': float(dt),
+            'saturated': False,
+            'notes': 'integrator_unit=deg*s (explicit)',
+        })
+        ctrl_yaw = getattr(self, '_pending_yaw_debug', None)
+        if isinstance(ctrl_yaw, dict):
+            ctrl_yaw = dict(ctrl_yaw)
+            ctrl_yaw['controller'] = 'index_yaw_hold'
+            ctrl_yaw['notes'] = 'yaw_pi holding tangential during INDEX_TUBE'
+            controllers.append(ctrl_yaw)
+        controllers.append({
+            'controller': 'index_sum',
+            'target': None,
+            'measured': None,
+            'error': None,
+            'error_unit': None,
+            'p': None,
+            'i': None,
+            'u_raw': float(linear_x_raw),
+            'u_sat': float(linear_x),
+            'integrator': None,
+            'integrator_unit': None,
+            'dt': float(dt),
+            'saturated': bool(abs(linear_x_raw) > self._max_index_linear_speed_mps),
+            'notes': 'cmd_linear_x_after_clamp',
+        })
+        self._publish_control_debug(controllers, cmd_linear_x=linear_x, cmd_angular_z=angular_z)
 
     def _index_error_rad(self) -> float:
         if (
@@ -772,6 +1467,9 @@ class InspectionStateMachineNode(Node):
             self._stop_turner()
             if self._state in (
                 ALIGN_TO_BOTTOM_LANE,
+                RECOVER_BOTTOM_AFTER_INDEX,
+                DESCEND_TO_BOTTOM_LANE,
+                REALIGN_AXIAL_YAW,
                 VERIFY_BOTTOM_LOCK,
                 AXIAL_SCAN,
                 RETURN_TO_BOTTOM_LANE,
@@ -795,7 +1493,7 @@ class InspectionStateMachineNode(Node):
                 self._prepare_lane()
                 self._transition(AXIAL_SCAN, 'bottom_lane_verified')
             else:
-                self._transition(ALIGN_TO_BOTTOM_LANE, 'bottom_lane_not_locked')
+                self._transition(DESCEND_TO_BOTTOM_LANE, 'bottom_lane_not_locked')
 
         elif self._state == ALIGN_TO_BOTTOM_LANE:
             self._stop_turner()
@@ -825,8 +1523,23 @@ class InspectionStateMachineNode(Node):
                 self._transition(RETURN_TO_BOTTOM_LANE, 'scan_not_safe')
             else:
                 angular_z = self._axial_scan_angular_command(self._desired_yaw_rad)
-                linear_x = self._axial_speed_mps * self._lane_direction
+                if (
+                    self._last_axial_mode == 'yaw_priority'
+                ):
+                    linear_speed = 0.0
+                elif (
+                    abs(self._last_axial_lateral_error_deg) > self._descend_bottom_max_lateral_angle_deg
+                ):
+                    linear_speed = min(self._axial_speed_mps, self._align_linear_speed_mps)
+                else:
+                    linear_speed = self._axial_speed_mps
+                linear_x = linear_speed * self._lane_direction
                 self._publish_cmd_vel(linear_x, angular_z)
+
+                controllers = getattr(self, '_pending_axial_debug', None)
+                if isinstance(controllers, list) and controllers:
+                    # Update only the per-tick command fields; controllers already include dt.
+                    self._publish_control_debug(controllers, cmd_linear_x=linear_x, cmd_angular_z=angular_z)
 
         elif self._state == RETURN_TO_BOTTOM_LANE:
             self._stop_base()
@@ -834,7 +1547,7 @@ class InspectionStateMachineNode(Node):
             if self._scan_allowed():
                 self._transition(VERIFY_BOTTOM_LOCK, 'bottom_lane_recovered')
             else:
-                self._transition(ALIGN_TO_BOTTOM_LANE, 'return_requires_active_alignment')
+                self._transition(DESCEND_TO_BOTTOM_LANE, 'return_requires_active_alignment')
 
         elif self._state == WAIT_SAFE_TO_INDEX:
             self._stop_base()
@@ -853,13 +1566,28 @@ class InspectionStateMachineNode(Node):
                 self._transition(INDEX_TUBE, 'tangential_yaw_reached')
 
         elif self._state == INDEX_TUBE:
-            # Pre-motion gate: only before first command; after that only bottom lock matters
-            if self._index_motion_committed and not self._bottom_locked():
-                self._stop_base()
-                self._stop_turner()
-                self._index_motion_committed = False
-                self._transition(ALIGN_TO_BOTTOM_LANE, 'index_bottom_lost')
-            elif not self._index_motion_committed and not self._index_allowed():
+            # Pre-motion gate uses the strict safe_to_index signal. Once the
+            # tube is moving, transient geometry loss should not abort the
+            # index unless explicitly enabled.
+            bottom_locked = self._bottom_locked()
+            if self._index_motion_committed and not bottom_locked:
+                if self._index_bottom_loss_start_s is None:
+                    self._index_bottom_loss_start_s = self._now_s()
+                bottom_loss_elapsed = self._now_s() - self._index_bottom_loss_start_s
+                if (
+                    self._abort_index_on_bottom_loss and
+                    bottom_loss_elapsed >= self._index_bottom_loss_grace_s
+                ):
+                    self._stop_base()
+                    self._stop_turner()
+                    self._index_motion_committed = False
+                    self._transition(DESCEND_TO_BOTTOM_LANE, 'index_bottom_lost')
+                    self._publish_state()
+                    return
+            else:
+                self._index_bottom_loss_start_s = None
+
+            if not self._index_motion_committed and not self._index_allowed():
                 self._stop_base()
                 self._stop_turner()
                 self._transition(WAIT_SAFE_TO_INDEX, 'index_not_safe')
@@ -886,7 +1614,7 @@ class InspectionStateMachineNode(Node):
                         else 'index_target_overshoot_guard'
                     )
                     if self._use_tangential_indexing:
-                        self._transition(ROTATE_TO_AXIAL, reason)
+                        self._transition(RECOVER_BOTTOM_AFTER_INDEX, reason)
                     else:
                         self._transition(VERIFY_INDEXED_POSITION, reason)
                 else:
@@ -899,10 +1627,31 @@ class InspectionStateMachineNode(Node):
                     else:
                         self._stop_base()
 
+        elif self._state == RECOVER_BOTTOM_AFTER_INDEX:
+            self._stop_turner()
+            if self._recover_bottom_ready_for_hold_time():
+                self._stop_base()
+                self._transition(REALIGN_AXIAL_YAW, 'bottom_recovered_after_index')
+            else:
+                self._publish_align_to_bottom_lane_cmd()
+
+        elif self._state == REALIGN_AXIAL_YAW:
+            self._stop_turner()
+            if self._rotate_to_yaw(self._axial_yaw_target_rad):
+                self._transition(VERIFY_BOTTOM_LOCK, 'axial_yaw_reached')
+
+        elif self._state == DESCEND_TO_BOTTOM_LANE:
+            self._stop_turner()
+            if self._descend_bottom_ready_for_hold_time():
+                self._stop_base()
+                self._transition(VERIFY_BOTTOM_LOCK, 'bottom_lane_descended')
+            else:
+                self._publish_descend_to_bottom_lane_cmd()
+
         elif self._state == ROTATE_TO_AXIAL:
             self._stop_turner()
             if self._rotate_to_yaw(self._axial_yaw_target_rad):
-                self._transition(ALIGN_TO_BOTTOM_LANE, 'axial_yaw_reached')
+                self._transition(DESCEND_TO_BOTTOM_LANE, 'axial_yaw_reached')
 
         elif self._state == VERIFY_INDEXED_POSITION:
             self._stop_base()
@@ -918,7 +1667,7 @@ class InspectionStateMachineNode(Node):
                     self._prepare_lane()
                     self._transition(AXIAL_SCAN, 'indexed_position_verified')
             elif settled:
-                self._transition(ALIGN_TO_BOTTOM_LANE, 'indexed_position_not_aligned')
+                self._transition(DESCEND_TO_BOTTOM_LANE, 'indexed_position_not_aligned')
 
         self._publish_state()
 
@@ -971,20 +1720,60 @@ class InspectionStateMachineNode(Node):
                 'lateral_error_deg': self._last_align_lateral_error_deg,
                 'last_linear_cmd_mps': self._last_align_linear_cmd_mps,
                 'last_cmd_rad_s': self._last_align_cmd_rad_s,
+                'mode': self._last_align_mode,
                 'k_heading_p': self._k_align_heading_p,
                 'k_lateral_p': self._k_align_lateral_p,
                 'k_lateral_i': self._k_align_lateral_i,
                 'lateral_sign': self._align_lateral_sign,
                 'lock_hold_s': self._align_lock_hold_s,
+                'max_lateral_angle_deg': self._align_max_lateral_angle_deg,
+                'yaw_tolerance_deg': self._align_yaw_tolerance_deg,
+                'yaw_lateral_capture_deg': self._align_yaw_lateral_capture_deg,
+                'yaw_reacquire_deg': self._align_yaw_reacquire_deg,
+                'ready': self._last_align_ready,
+                'ready_reason': self._last_align_ready_reason,
                 'locked_hold_elapsed_s': (
                     self._now_s() - self._align_lock_start_s
                     if self._align_lock_start_s is not None else 0.0
                 ),
             },
+            'recover_bottom': {
+                'ready': self._last_recover_bottom_ready,
+                'ready_reason': self._last_recover_bottom_reason,
+                'require_pitch': self._recover_bottom_require_pitch,
+                'hold_s': self._recover_bottom_hold_s,
+                'hold_elapsed_s': (
+                    self._now_s() - self._recover_bottom_lock_start_s
+                    if self._recover_bottom_lock_start_s is not None else 0.0
+                ),
+                'max_roll_deg': self._recover_bottom_max_roll_deg,
+                'max_pitch_deg': self._recover_bottom_max_pitch_deg,
+                'max_lateral_angle_deg': self._recover_bottom_max_lateral_angle_deg,
+                'max_linear_speed_mps': self._recover_bottom_max_linear_speed_mps,
+                'max_yaw_rate_rad_s': self._recover_bottom_max_yaw_rate_rad_s,
+            },
+            'descend_bottom': {
+                'ready': self._last_descend_ready,
+                'ready_reason': self._last_descend_reason,
+                'hold_s': self._descend_bottom_hold_s,
+                'hold_elapsed_s': (
+                    self._now_s() - self._descend_lock_start_s
+                    if self._descend_lock_start_s is not None else 0.0
+                ),
+                'max_lateral_angle_deg': self._descend_bottom_max_lateral_angle_deg,
+            },
             'index_compensation': {
                 'enabled': self._use_tangential_indexing,
                 'tube_radius_m': self._tube_radius_m,
+                'compensation_gain': self._index_compensation_gain,
                 'compensation_sign': self._index_compensation_sign,
+                'contextual_compensation_sign': self._current_index_compensation_sign(),
+                'alternate_by_lane': self._index_compensation_alternate_by_lane,
+                'surface_speed_mps': self._last_index_surface_speed_mps,
+                'lateral_correction_mps': self._last_index_lateral_correction_mps,
+                'lateral_sign': self._index_lateral_sign,
+                'k_lateral_p': self._k_index_lateral_p,
+                'k_lateral_i': self._k_index_lateral_i,
                 'last_base_cmd_mps': self._last_index_base_cmd_mps,
                 'last_turner_cmd_rad_s': self._last_turner_cmd_rad_s,
                 'lateral_angle_deg': (
@@ -1016,6 +1805,16 @@ class InspectionStateMachineNode(Node):
                 'require_bottom_lane_lock': self._require_bottom_lane_lock,
                 'require_safe_to_scan': self._require_safe_to_scan,
                 'require_safe_to_index': self._require_safe_to_index,
+                'abort_index_on_bottom_loss': self._abort_index_on_bottom_loss,
+                'index_bottom_loss_grace_s': self._index_bottom_loss_grace_s,
+            },
+            'index_safety': {
+                'motion_committed': self._index_motion_committed,
+                'bottom_loss_active': self._index_bottom_loss_start_s is not None,
+                'bottom_loss_elapsed_s': (
+                    self._now_s() - self._index_bottom_loss_start_s
+                    if self._index_bottom_loss_start_s is not None else 0.0
+                ),
             },
             'inputs': {
                 'signals_ready': self._signals_ready(),

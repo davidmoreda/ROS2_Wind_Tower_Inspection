@@ -168,7 +168,9 @@
         <axis>
           <xyz expressed_in="__model__">0 0 1</xyz>
           <limit><lower>-1e16</lower><upper>1e16</upper></limit>
-          <dynamics><damping>50.0</damping><friction>10.0</friction></dynamics>
+          <!-- Low losses keep the simulated turner responsive to velocity commands.
+               Real actuator limits should be modelled separately once hardware data exists. -->
+          <dynamics><damping>2.0</damping><friction>0.1</friction></dynamics>
         </axis>
       </joint>
 
