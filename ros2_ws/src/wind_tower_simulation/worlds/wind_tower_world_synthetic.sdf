@@ -1,0 +1,2515 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="wind_tower_world">
+
+    <physics type="ode">
+      <max_step_size>0.003</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>333</real_time_update_rate>
+    </physics>
+
+    <plugin name='gz::sim::systems::Physics'        filename='libgz-sim-physics-system.so'/>
+    <plugin name='gz::sim::systems::UserCommands'   filename='libgz-sim-user-commands-system.so'/>
+    <plugin name='gz::sim::systems::SceneBroadcaster' filename='libgz-sim-scene-broadcaster-system.so'/>
+    <plugin name='gz::sim::systems::Contact'        filename='libgz-sim-contact-system.so'/>
+    <plugin name="gz::sim::systems::Sensors"        filename="libgz-sim-sensors-system.so">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin name="gz::sim::systems::Imu"    filename="libgz-sim-imu-system.so"/>
+    <plugin name="gz::sim::systems::NavSat" filename="libgz-sim-navsat-system.so"/>
+
+    <scene>
+      <ambient>0.8 0.8 0.8 1</ambient>
+      <background>0.3 0.3 0.35 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 20 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.3 0.3 0.3 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Suelo -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <surface><friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction></surface>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.35 0.35 0.35 1</ambient>
+            <diffuse>0.5 0.5 0.5 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════
+         NAVE INDUSTRIAL
+         60 m largo (Y: -30 a +30)
+         30 m ancho (X: -15 a +15)
+         18 m altura
+         ═══════════════════════════════════════════ -->
+
+    <!-- Pared norte -->
+    <model name="wall_north">
+      <static>true</static>
+      <pose>0 30 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>30 0.4 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>30 0.4 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared sur -->
+    <model name="wall_south">
+      <static>true</static>
+      <pose>0 -30 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>30 0.4 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>30 0.4 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared este -->
+    <model name="wall_east">
+      <static>true</static>
+      <pose>15 0 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.4 60 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.4 60 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Pared oeste -->
+    <model name="wall_west">
+      <static>true</static>
+      <pose>-15 0 9 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.4 60 18</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.4 60 18</size></box></geometry>
+          <material><ambient>0.72 0.72 0.75 1</ambient><diffuse>0.72 0.72 0.75 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ═══════════════════════════════════════════
+         TRAMO DE TORRE EÓLICA
+         STL en mm, eje Z axial → scale 0.001
+         Tumbado: eje axial a lo largo de Y mundial
+         Pose: roll=1.5708 (Z local → -Y mundial)
+         Centro mundial: (0, 0, 4)
+           x_model = -4   (centra sección X: 0→8 m)
+           y_model = +15  (centra largo  Z: 0→30 m → Y: -15..+15)
+           z_model =  0   (base Y local 0→8 m queda en Z mundial 0→8 m)
+         ═══════════════════════════════════════════ -->
+    <model name="wind_tower_tube">
+      <static>false</static>
+      <pose>-4 15 0 1.5708 0 0</pose>
+      <link name="tube_link">
+        <!-- Inercia de cilindro hueco Ø8m×30m, masa simulada -->
+        <inertial>
+          <mass>2000</mass>
+          <inertia>
+            <ixx>155000</ixx><ixy>0</ixy><ixz>0</ixz>
+            <iyy>155000</iyy><iyz>0</iyz>
+            <izz>32000</izz>
+          </inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry>
+            <mesh>
+              <uri>model://TRAMO_TORRE.STL</uri>
+              <scale>0.001 0.001 0.001</scale>
+            </mesh>
+          </geometry>
+          <material>
+            <ambient>0.55 0.58 0.62 1</ambient>
+            <diffuse>0.55 0.58 0.62 1</diffuse>
+            <specular>0.3 0.3 0.3 1</specular>
+          </material>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <mesh>
+              <uri>model://TRAMO_TORRE.STL</uri>
+              <scale>0.001 0.001 0.001</scale>
+            </mesh>
+          </geometry>
+        </collision>
+      </link>
+
+      <!-- Joint revolute: fija traslación, permite rotación alrededor del eje axial del tubo -->
+      <!-- pose en frame tube_link: centro sección X 0→8m = 4, Y 0→8m = 4 -->
+      <joint name="turner_joint" type="revolute">
+        <parent>world</parent>
+        <child>tube_link</child>
+        <pose>4.0 4.0 0 0 0 0</pose>
+        <axis>
+          <xyz expressed_in="__model__">0 0 1</xyz>
+          <limit><lower>-1e16</lower><upper>1e16</upper></limit>
+          <!-- Low losses keep the simulated turner responsive to velocity commands.
+               Real actuator limits should be modelled separately once hardware data exists. -->
+          <dynamics><damping>2.0</damping><friction>0.1</friction></dynamics>
+        </axis>
+      </joint>
+
+      <!-- Controlador de velocidad del virador -->
+      <plugin filename="gz-sim-joint-controller-system"
+              name="gz::sim::systems::JointController">
+        <joint_name>turner_joint</joint_name>
+        <use_force_commands>false</use_force_commands>
+        <initial_velocity>0.0</initial_velocity>
+      </plugin>
+
+      <!-- Publicador de estado del joint (ángulo) -->
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher"/>
+
+    </model>
+
+  
+    <!-- SYNTHETIC DEFECTS (auto-generated) -->
+    <model name="defect_0000_pitting">
+      <static>true</static>
+      <pose>3.849072 -5.849238 3.345928 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02075</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02075</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0001_pitting">
+      <static>true</static>
+      <pose>2.018058 10.196669 0.680613 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04030</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04030</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0002_rust">
+      <static>true</static>
+      <pose>-0.130619 -7.315413 7.880418 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04238</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04238</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0003_rust">
+      <static>true</static>
+      <pose>-1.078076 3.896995 7.715862 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05591</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05591</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0004_rust">
+      <static>true</static>
+      <pose>0.156667 8.045192 0.165340 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08714</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08714</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0005_through_hole">
+      <static>true</static>
+      <pose>3.190843 -4.153487 1.845530 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07491</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07491</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0006_through_hole">
+      <static>true</static>
+      <pose>2.208609 -10.588608 0.824345 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05683</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05683</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0007_through_hole">
+      <static>true</static>
+      <pose>-3.823598 7.985335 4.489581 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07019</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07019</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0008_pitting">
+      <static>true</static>
+      <pose>-1.244852 -3.158106 7.670452 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04919</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04919</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0009_through_hole">
+      <static>true</static>
+      <pose>-1.800271 9.404379 7.407772 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07093</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07093</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0010_pitting">
+      <static>true</static>
+      <pose>3.784691 -7.074645 4.956245 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02137</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02137</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0011_rust">
+      <static>true</static>
+      <pose>3.806809 -10.373963 4.676074 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05862</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05862</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0012_pitting">
+      <static>true</static>
+      <pose>3.768698 -3.375295 3.019910 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.03094</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.03094</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0013_rust">
+      <static>true</static>
+      <pose>-2.412563 3.848920 6.948924 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11493</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11493</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0014_rust">
+      <static>true</static>
+      <pose>2.629065 -8.751535 6.780543 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09833</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09833</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0015_through_hole">
+      <static>true</static>
+      <pose>-3.532389 1.480693 5.538777 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07200</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07200</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0016_through_hole">
+      <static>true</static>
+      <pose>0.770498 -7.044750 0.231766 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07880</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07880</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0017_rust">
+      <static>true</static>
+      <pose>-1.356370 -7.514446 0.382333 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06142</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06142</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0018_through_hole">
+      <static>true</static>
+      <pose>2.359343 4.041405 7.066712 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05573</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05573</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0019_through_hole">
+      <static>true</static>
+      <pose>3.861190 -6.113116 3.918169 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06294</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06294</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0020_pitting">
+      <static>true</static>
+      <pose>-2.333581 2.199236 0.878794 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02788</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02788</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0021_rust">
+      <static>true</static>
+      <pose>-0.231350 12.935978 7.860528 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05755</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05755</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0022_rust">
+      <static>true</static>
+      <pose>-2.786298 -10.149123 6.701943 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04377</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04377</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0023_pitting">
+      <static>true</static>
+      <pose>2.635481 -11.348280 6.864352 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.03266</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.03266</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0024_through_hole">
+      <static>true</static>
+      <pose>-2.960975 12.248038 1.525936 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06646</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06646</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0025_rust">
+      <static>true</static>
+      <pose>-0.881085 4.724470 7.724545 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09766</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09766</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0026_rust">
+      <static>true</static>
+      <pose>1.527743 -10.099643 7.516168 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09128</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09128</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0027_rust">
+      <static>true</static>
+      <pose>3.795225 9.772176 4.320032 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11631</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11631</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0028_pitting">
+      <static>true</static>
+      <pose>-2.834003 10.728324 1.321264 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02536</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02536</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0029_rust">
+      <static>true</static>
+      <pose>3.141383 2.833225 1.802188 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09112</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09112</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0030_pitting">
+      <static>true</static>
+      <pose>-0.737179 7.244288 7.818308 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.03618</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.03618</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0031_rust">
+      <static>true</static>
+      <pose>-1.662861 -12.493605 0.517573 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06593</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06593</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0032_through_hole">
+      <static>true</static>
+      <pose>1.368151 -5.004633 0.408341 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08158</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08158</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0033_through_hole">
+      <static>true</static>
+      <pose>0.337371 -10.773010 7.822794 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08735</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08735</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0034_rust">
+      <static>true</static>
+      <pose>2.761087 6.911695 1.354148 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.10085</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.10085</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0035_rust">
+      <static>true</static>
+      <pose>-2.759459 -6.108528 1.328149 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08398</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08398</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0036_rust">
+      <static>true</static>
+      <pose>-3.837345 1.021698 4.486458 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05694</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05694</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0037_rust">
+      <static>true</static>
+      <pose>-3.121117 12.873883 6.271280 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06494</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06494</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0038_rust">
+      <static>true</static>
+      <pose>3.795123 -9.853891 3.391511 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08141</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08141</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0039_rust">
+      <static>true</static>
+      <pose>3.770934 -7.017017 3.285993 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08706</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08706</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0040_rust">
+      <static>true</static>
+      <pose>-2.146938 -7.047514 0.822873 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09049</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09049</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0041_through_hole">
+      <static>true</static>
+      <pose>-3.389267 -6.811880 5.891714 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04354</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04354</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0042_rust">
+      <static>true</static>
+      <pose>-1.672586 11.323370 7.494789 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05058</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05058</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0043_rust">
+      <static>true</static>
+      <pose>3.557432 7.994922 2.602101 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.10277</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.10277</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0044_rust">
+      <static>true</static>
+      <pose>0.792093 -1.986956 7.768164 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07448</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07448</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0045_pitting">
+      <static>true</static>
+      <pose>2.252073 12.588295 0.834588 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04020</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04020</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0046_rust">
+      <static>true</static>
+      <pose>3.857718 9.403486 3.967430 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06714</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06714</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0047_rust">
+      <static>true</static>
+      <pose>3.787368 -2.031077 4.686660 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07589</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07589</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0048_rust">
+      <static>true</static>
+      <pose>-2.915835 -1.478601 1.545884 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11386</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11386</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0049_pitting">
+      <static>true</static>
+      <pose>-3.346992 12.981344 1.991314 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02152</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02152</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0050_through_hole">
+      <static>true</static>
+      <pose>3.320100 9.066089 2.073237 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08632</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08632</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0051_rust">
+      <static>true</static>
+      <pose>1.392982 -2.572952 0.391641 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05710</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05710</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0052_rust">
+      <static>true</static>
+      <pose>-3.719295 -6.104720 3.191414 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11882</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11882</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0053_rust">
+      <static>true</static>
+      <pose>-0.110744 11.890259 0.150433 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07384</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07384</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0054_pitting">
+      <static>true</static>
+      <pose>3.717410 -8.975283 5.123401 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04155</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04155</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0055_through_hole">
+      <static>true</static>
+      <pose>-3.855729 1.097075 4.049047 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06896</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06896</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0056_rust">
+      <static>true</static>
+      <pose>-3.066215 0.074110 1.691189 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08673</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08673</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0057_rust">
+      <static>true</static>
+      <pose>3.502728 -10.917102 2.505742 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11686</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11686</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0058_pitting">
+      <static>true</static>
+      <pose>2.657272 -6.884699 1.166250 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04026</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04026</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0059_through_hole">
+      <static>true</static>
+      <pose>-2.640048 2.457498 6.833350 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05231</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05231</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0060_rust">
+      <static>true</static>
+      <pose>-1.530874 0.592351 0.480196 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08669</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08669</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0061_rust">
+      <static>true</static>
+      <pose>2.331065 -6.794165 7.036027 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.09730</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.09730</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0062_pitting">
+      <static>true</static>
+      <pose>-3.895733 -4.779393 3.954360 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02900</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02900</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0063_rust">
+      <static>true</static>
+      <pose>-0.094378 12.959815 0.152820 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07666</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07666</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0064_rust">
+      <static>true</static>
+      <pose>-1.574878 -6.104789 0.467185 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05705</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05705</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0065_through_hole">
+      <static>true</static>
+      <pose>3.213633 -3.392296 1.896165 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08396</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08396</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0066_through_hole">
+      <static>true</static>
+      <pose>-0.308490 2.903622 0.162557 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.07518</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.07518</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0067_pitting">
+      <static>true</static>
+      <pose>3.718334 8.244708 5.192134 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02023</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02023</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0068_pitting">
+      <static>true</static>
+      <pose>2.571618 -9.508431 1.098861 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04817</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04817</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0069_rust">
+      <static>true</static>
+      <pose>-2.350772 -5.918946 7.037297 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08426</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08426</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0070_pitting">
+      <static>true</static>
+      <pose>3.883852 3.490187 4.342129 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02611</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02611</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0071_rust">
+      <static>true</static>
+      <pose>2.089153 8.998697 0.810775 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.11243</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.11243</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0072_rust">
+      <static>true</static>
+      <pose>-3.828906 -12.907812 3.488916 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06213</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06213</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0073_pitting">
+      <static>true</static>
+      <pose>-1.243349 6.272004 7.693480 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.02786</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.02786</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0074_rust">
+      <static>true</static>
+      <pose>-2.603168 -11.043660 1.117166 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04077</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04077</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0075_through_hole">
+      <static>true</static>
+      <pose>-1.911542 8.699471 7.350823 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.06728</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.00 0.00 0.00 1</ambient>
+            <diffuse>0.00 0.00 0.00 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.06728</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0076_rust">
+      <static>true</static>
+      <pose>-2.297567 -4.985283 0.879857 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.05020</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.05020</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0077_pitting">
+      <static>true</static>
+      <pose>3.757771 10.372041 3.037094 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04582</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.15 0.15 0.15 1</ambient>
+            <diffuse>0.15 0.15 0.15 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04582</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0078_rust">
+      <static>true</static>
+      <pose>-2.579531 7.283022 1.105969 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.04822</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.04822</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <model name="defect_0079_rust">
+      <static>true</static>
+      <pose>-1.635605 -8.981613 0.530896 0 0 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry>
+            <sphere>
+              <radius>0.08965</radius>
+            </sphere>
+          </geometry>
+          <material>
+            <ambient>0.55 0.18 0.05 1</ambient>
+            <diffuse>0.55 0.18 0.05 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+          </material>
+          <cast_shadows>false</cast_shadows>
+        </visual>
+        <collision name="collision">
+          <geometry>
+            <sphere><radius>0.08965</radius></sphere>
+          </geometry>
+          <surface>
+            <contact>
+              <collide_bitmask>0</collide_bitmask>
+            </contact>
+          </surface>
+        </collision>
+      </link>
+    </model>
+    <!-- END SYNTHETIC DEFECTS -->
+</world>
+</sdf>
