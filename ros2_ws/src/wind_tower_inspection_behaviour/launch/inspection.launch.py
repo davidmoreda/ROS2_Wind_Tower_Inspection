@@ -24,6 +24,11 @@ def generate_launch_description():
         'config',
         'state_machine.yaml',
     ])
+    heading_ekf_params = PathJoinSubstitution([
+        behaviour_share,
+        'config',
+        'heading_ekf.yaml',
+    ])
 
     use_cylinder_localizer = LaunchConfiguration('use_cylinder_localizer')
     use_ps5 = LaunchConfiguration('use_ps5')
@@ -33,6 +38,8 @@ def generate_launch_description():
     stability_lateral_angle_mode = LaunchConfiguration('stability_lateral_angle_mode')
     use_cylindrical_map = LaunchConfiguration('use_cylindrical_map')
     use_state_machine = LaunchConfiguration('use_state_machine')
+    use_heading_ekf = LaunchConfiguration('use_heading_ekf')
+    state_machine_odom_topic = LaunchConfiguration('state_machine_odom_topic')
     state_machine_auto_start = LaunchConfiguration('state_machine_auto_start')
     state_machine_axial_axis = LaunchConfiguration('state_machine_axial_axis')
     state_machine_lane_length_m = LaunchConfiguration('state_machine_lane_length_m')
@@ -176,6 +183,16 @@ def generate_launch_description():
             'use_state_machine',
             default_value='true',
             description='Launch mission state machine. It only moves if auto_start is true.',
+        ),
+        DeclareLaunchArgument(
+            'use_heading_ekf',
+            default_value='false',
+            description='Launch robot_localization EKF (IMU + wheel odom) publishing /inspection/odom_kf.',
+        ),
+        DeclareLaunchArgument(
+            'state_machine_odom_topic',
+            default_value='/robot/platform/odom/filtered',
+            description='Odometry topic consumed by state_machine heading controllers. Set /inspection/odom_kf when use_heading_ekf=true.',
         ),
         DeclareLaunchArgument(
             'state_machine_auto_start',
@@ -499,6 +516,17 @@ def generate_launch_description():
             condition=IfCondition(use_cylindrical_map),
         ),
         Node(
+            package='robot_localization',
+            executable='ekf_node',
+            name='inspection_heading_ekf',
+            output='screen',
+            parameters=[heading_ekf_params],
+            remappings=[
+                ('odometry/filtered', '/inspection/odom_kf'),
+            ],
+            condition=IfCondition(use_heading_ekf),
+        ),
+        Node(
             package='wind_tower_inspection_behaviour',
             executable='state_machine',
             name='state_machine',
@@ -507,6 +535,7 @@ def generate_launch_description():
                 state_machine_params,
                 {
                     'auto_start': state_machine_auto_start,
+                    'odom_topic': state_machine_odom_topic,
                     'mission.axial_axis': state_machine_axial_axis,
                     'mission.lane_length_m': state_machine_lane_length_m,
                     'mission.lane_delta_theta_deg':

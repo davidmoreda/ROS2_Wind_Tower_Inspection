@@ -17,7 +17,7 @@
 | `/robot/platform/odom` | `nav_msgs/Odometry` | ~50 | Clearpath | EKF |
 | `/robot/platform/odom/filtered` | `nav_msgs/Odometry` | ~43 | Clearpath EKF interno | stability_monitor, cylindrical_map, state_machine |
 | `/robot/sensors/imu_0/data` | `sensor_msgs/Imu` | 100 | gz bridge | stability_monitor |
-| `/velodyne_points` | `sensor_msgs/PointCloud2` | 20 | gz bridge (remap desde `/robot/sensors/lidar3d_0/scan/points`) | cylinder_localizer (y rtabmap si se lanza) |
+| `/velodyne_points` | `sensor_msgs/PointCloud2` | 20 | gz bridge (remap desde `/robot/sensors/lidar3d_0/scan/points`) | cylinder_localizer |
 | `/robot/sensors/inspection_camera/image` | `sensor_msgs/Image` | ~16 | ros_gz_image | inspection_image_relay |
 | `/inspection/camera/image_raw` | `sensor_msgs/Image` | ~16 | relay desde el anterior | futuro image_capture |
 | `/inspection/camera/camera_info` | `sensor_msgs/CameraInfo` | ~16 | gz bridge (remap) | futuro |

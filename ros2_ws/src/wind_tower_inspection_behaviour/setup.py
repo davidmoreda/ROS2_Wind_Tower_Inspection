@@ -17,6 +17,7 @@ setup(
             'config/inspection_params.yaml',
             'config/stability_monitor.yaml',
             'config/state_machine.yaml',
+            'config/heading_ekf.yaml',
         ]),
     ],
     install_requires=['setuptools'],

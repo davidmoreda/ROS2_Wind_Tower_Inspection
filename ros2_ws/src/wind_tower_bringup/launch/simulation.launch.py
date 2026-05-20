@@ -49,6 +49,17 @@ def generate_launch_description():
     pkg_ros_gz_sim     = get_package_share_directory('ros_gz_sim')
     pkg_wind_sim       = get_package_share_directory('wind_tower_simulation')
     pkg_wind_desc      = get_package_share_directory('wind_tower_description')
+    pkg_wind_bringup   = get_package_share_directory('wind_tower_bringup')
+
+    # Sincroniza robot.yaml del repo → ~/clearpath/ antes de que Clearpath lo lea.
+    repo_robot_yaml = os.path.join(pkg_wind_bringup, 'config', 'robot.yaml')
+    clearpath_dir   = os.path.join(os.path.expanduser('~'), 'clearpath')
+    sync_robot_yaml = ExecuteProcess(
+        cmd=['bash', '-c',
+             f'mkdir -p {clearpath_dir} && '
+             f'cp -v {repo_robot_yaml} {clearpath_dir}/robot.yaml'],
+        output='screen',
+    )
 
     default_world_file = os.path.join(
         pkg_wind_sim, 'worlds', 'wind_tower_world.sdf')
@@ -277,6 +288,7 @@ def generate_launch_description():
 
     return LaunchDescription(ARGUMENTS + [
         declare_world_file,
+        sync_robot_yaml,
         set_pythonpath,
         set_gz_resource_path,
         gz_sim,

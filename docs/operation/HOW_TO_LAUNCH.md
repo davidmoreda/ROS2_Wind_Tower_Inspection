@@ -115,7 +115,6 @@ Genera `debug_runs/<timestamp>/` con `summary.md` listo para compartir con un ag
 | Launcher | Por qué |
 |---|---|
 | `slam.launch.py` | LEGACY PROBABLE. Espera `/scan` (LaserScan), que el pipeline activo no produce. Ver `LAUNCHERS_REFERENCE.md`. |
-| `rtabmap.launch.py` | AUXILIAR. Útil para experimentos LiDAR puros, pero `θ_tube` debe venir del encoder del virador, no de ICP. |
 
 ---
 

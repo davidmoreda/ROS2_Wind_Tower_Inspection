@@ -19,7 +19,6 @@
 | `simulation.launch.py` | `wind_tower_bringup` | Gazebo + mundo + spawn Clearpath (Husky+UR5e+VLP-16+IMU) + bridges (clock, turner, LiDAR, IMU, cámara) + `turner_node` + `tf_static_relay` + `ekf_filter_node` (ver nota EKF) + límites teleop | `wind_tower_bringup/config/ekf.yaml` | **CENTRAL** | `ros2 launch wind_tower_bringup simulation.launch.py` |
 | `inspection.launch.py` | `wind_tower_inspection_behaviour` | `cylinder_localizer`, `dualsense_joy`, `ps5_teleop`, `stability_monitor`, `cylindrical_map`, `state_machine` | `inspection_params.yaml`, `stability_monitor.yaml`, `state_machine.yaml` | **CENTRAL** | `ros2 launch wind_tower_inspection_behaviour inspection.launch.py` |
 | `perception.launch.py` | `wind_tower_perception` | Static TF `world→odom`, `defect_detector`, `image_capture`, `defect_mapper`, opcionalmente `synthetic_capture` | `perception_params.yaml`, `synthetic_dataset.yaml` | **CENTRAL** | `ros2 launch wind_tower_perception perception.launch.py` |
-| `rtabmap.launch.py` | `wind_tower_bringup` | `icp_odometry`, `rtabmap`, `rtabmap_viz` (loop closure desactivado por simetría del cilindro) | parámetros inline | **AUXILIAR** | `ros2 launch wind_tower_bringup rtabmap.launch.py` |
 | Launchers en `gz_ros2_control_demos/launch/*` | `gz_ros2_control_demos` | Demos upstream | varias | **DEMO / TEST** (no se usan en este proyecto) | (ver upstream) |
 
 **Eliminado del repo** en BUILD 2026-05-12: `slam.launch.py` y `slam_toolbox.yaml` (dependían de `/scan` que el pipeline no publica). Recuperables con `git log --all -- ros2_ws/src/wind_tower_bringup/launch/slam.launch.py`.
@@ -51,12 +50,6 @@
 - Para generar dataset sintético: arranca primero Gazebo con un mundo generado por `generate_synthetic_world` y después `ros2 launch wind_tower_perception perception.launch.py use_synthetic_capture:=true ground_truth_path:=~/wind_tower_synthetic/defects_ground_truth.yaml`.
 - Los `frames + sidecars + detections.ndjson` se escriben en `~/wind_tower_inspections/run_*/` (configurable via `output_root`).
 - El generador de informe se invoca **fuera** de ROS: `python3 -m wind_tower_perception.scripts.generate_inspection_report --run-dir ~/wind_tower_inspections/run_YYYYMMDD_HHMMSS`. Requiere `ANTHROPIC_API_KEY` y `pip install anthropic`.
-
-### `rtabmap.launch.py`
-
-- Consume `/velodyne_points` (existe en pipeline).
-- Loop closure desactivado intencionadamente: el cilindro es simétrico y produce falsos positivos en cierre de bucle. Por eso `θ_tube` viene del encoder del virador, no de ICP/SLAM.
-- **No es la fuente de `θ_tube`** — eso lo da `turner_node` desde el encoder. Mantener este launcher solo para experimentos LiDAR puros.
 
 ### `slam.launch.py` — RETIRADO
 
