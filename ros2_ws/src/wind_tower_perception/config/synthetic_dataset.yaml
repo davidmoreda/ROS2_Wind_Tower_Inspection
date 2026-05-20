@@ -1,0 +1,21 @@
+synthetic_capture:
+  ros__parameters:
+    image_topic: /inspection/camera/image_raw
+    camera_info_topic: /inspection/camera/camera_info
+
+    world_frame: world
+    camera_frame: inspection_camera_optical_frame
+
+    # Path to the YAML produced by ``generate_synthetic_world``. Must be set
+    # (the node refuses to start without it).
+    ground_truth_path: ~/wind_tower_synthetic/defects_ground_truth.yaml
+
+    output_dir: ~/wind_tower_dataset
+
+    max_depth_m: 6.0
+    min_pixel_radius: 4.0
+    val_every_n: 5
+    jpeg_quality: 92
+    min_frame_period_s: 0.20
+    tf_timeout_s: 0.2
+    save_empty_frames: false

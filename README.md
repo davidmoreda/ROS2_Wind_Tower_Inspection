@@ -17,11 +17,15 @@ Proyecto en fase de **simulación y MVP**. Hay una base funcional de simulación
 | Encoder virador → `/turner/angle` | **IMPLEMENTADO** | `turner_node` |
 | Monitor de estabilidad (`bottom_lane_locked`, `safe_to_scan`, `safe_to_index_tube`) | **IMPLEMENTADO** | `stability_monitor_node.py` |
 | Localizador de cilindro (LiDAR fit) | **IMPLEMENTADO PARCIALMENTE** | `cylinder_localizer_node.py` (prototipo) |
-| Inspección autónoma por calles axiales con indexado angular (MVP) | **IMPLEMENTADO PARCIALMENTE** | `state_machine_node.py` (sin bypass / local_inspection / report aún) |
+| Inspección autónoma por calles axiales con indexado angular (MVP) | **IMPLEMENTADO PARCIALMENTE** | `state_machine_node.py` (sin bypass / local_inspection aún) |
 | Cobertura pasiva en malla `(x, θ)` | **IMPLEMENTADO** | `cylindrical_map_node.py` |
 | **Navegación Nav2 sobre cilindro desplegado** | **PROPUESTO / NO IMPLEMENTADO** | `docs/architecture/NAV2_CYLINDRICAL_NAVIGATION.md` |
-| Captura de imágenes por distancia + metadatos | **PROPUESTO / NO IMPLEMENTADO** | — |
-| Generación de informe de inspección | **PROPUESTO / NO IMPLEMENTADO** | — |
+| Detección de defectos circulares (HoughCircles baseline + slot YOLO) | **IMPLEMENTADO** | `wind_tower_perception/detector_node.py` |
+| Captura de imágenes con metadatos cilíndricos + `detections.ndjson` | **IMPLEMENTADO** | `wind_tower_perception/image_capture_node.py` |
+| Proyección de detecciones a `(x_axial, θ_surface)` + clustering | **IMPLEMENTADO** | `wind_tower_perception/defect_mapper_node.py` |
+| Generador de dataset sintético YOLO desde Gazebo (autolabel) | **IMPLEMENTADO** | `generate_synthetic_world.py` + `synthetic_capture_node.py` |
+| Entrenamiento YOLOv8 sobre dataset sintético | **IMPLEMENTADO** (script wrapper) | `scripts/train_yolo.py` |
+| Generación de informe de inspección (Markdown vía Claude API) | **IMPLEMENTADO** | `scripts/generate_inspection_report.py` |
 | SLAM (`slam_toolbox`) | **RETIRADO** | Eliminado en BUILD 2026-05-12 (recuperable vía `git log`) |
 | RTAB-Map | **AUXILIAR / experimental** | `rtabmap.launch.py` (loop closure desactivado por simetría del cilindro) |
 
@@ -41,6 +45,7 @@ Para detalle completo ver:
 | `wind_tower_simulation` | ament_cmake | Mundo Gazebo `wind_tower_world.sdf` |
 | `wind_tower_bringup` | ament_python | Launchers, bridges, teleop, virador, utilidades LiDAR |
 | `wind_tower_inspection_behaviour` | ament_python | Lógica autónoma: state_machine, stability_monitor, cylindrical_map |
+| `wind_tower_perception` | ament_python | Detector de defectos (HoughCircles/YOLO), captura con metadatos, proyección a `(x, θ)`, dataset sintético + informe LLM |
 | `gz_ros2_control` (fork) | upstream | Fix WSL2 null-pointer crítico para Gazebo |
 
 ---
@@ -51,6 +56,7 @@ Para detalle completo ver:
 |---|---|---|---|
 | `simulation.launch.py` | `wind_tower_bringup` | **CENTRAL** | `ros2 launch wind_tower_bringup simulation.launch.py` |
 | `inspection.launch.py` | `wind_tower_inspection_behaviour` | **CENTRAL** | `ros2 launch wind_tower_inspection_behaviour inspection.launch.py` |
+| `perception.launch.py` | `wind_tower_perception` | **CENTRAL** | `ros2 launch wind_tower_perception perception.launch.py` |
 | `rtabmap.launch.py` | `wind_tower_bringup` | AUXILIAR | (experimentos LiDAR puros) |
 
 Detalle en [`docs/operation/LAUNCHERS_REFERENCE.md`](docs/operation/LAUNCHERS_REFERENCE.md).
@@ -64,7 +70,7 @@ Pasos completos en [`docs/operation/HOW_TO_LAUNCH.md`](docs/operation/HOW_TO_LAU
 ```bash
 # Una vez por sesión
 cd ~/ROS2_wind_tower_inspection/ros2_ws && ai-on
-colcon build --packages-select wind_tower_simulation wind_tower_description wind_tower_bringup wind_tower_inspection_behaviour
+colcon build --packages-select wind_tower_simulation wind_tower_description wind_tower_bringup wind_tower_inspection_behaviour wind_tower_perception
 source install/setup.bash
 
 # Terminal 1 — simulación + bridges
@@ -73,7 +79,19 @@ ros2 launch wind_tower_bringup simulation.launch.py
 # Terminal 2 — misión de inspección (queda en IDLE por defecto)
 ros2 launch wind_tower_inspection_behaviour inspection.launch.py
 # Pulsar Triángulo en el DualSense → START_AUTO
+
+# Terminal 3 — percepción (HoughCircles baseline, vale sin pesos YOLO)
+ros2 launch wind_tower_perception perception.launch.py
+# Cuando haya pesos entrenados:
+#   ros2 launch wind_tower_perception perception.launch.py backend:=yolo yolo_model_path:=~/wind_tower_runs/wind_tower_defects/weights/best.pt
+
+# Al final de la misión — informe Markdown vía LLM
+export ANTHROPIC_API_KEY="sk-..."
+python3 -m wind_tower_perception.scripts.generate_inspection_report \
+    --run-dir ~/wind_tower_inspections/run_YYYYMMDD_HHMMSS
 ```
+
+Pipeline completo de **dataset sintético + entrenamiento YOLO** en [`docs/architecture/PERCEPTION_PIPELINE.md`](docs/architecture/PERCEPTION_PIPELINE.md) §7.
 
 ---
 
@@ -124,6 +142,7 @@ Antes de mergear a `main`:
 | Arquitectura actual (lo que existe) | [`docs/architecture/CURRENT_ARCHITECTURE.md`](docs/architecture/CURRENT_ARCHITECTURE.md) |
 | Arquitectura objetivo (propuesta) | [`docs/architecture/TARGET_ARCHITECTURE.md`](docs/architecture/TARGET_ARCHITECTURE.md) |
 | Nav2 sobre cilindro desplegado (técnico) | [`docs/architecture/NAV2_CYLINDRICAL_NAVIGATION.md`](docs/architecture/NAV2_CYLINDRICAL_NAVIGATION.md) |
+| Pipeline de percepción + dataset sintético + informe LLM | [`docs/architecture/PERCEPTION_PIPELINE.md`](docs/architecture/PERCEPTION_PIPELINE.md) |
 | Guía de desarrollo | [`docs/development/DEVELOPMENT_GUIDE.md`](docs/development/DEVELOPMENT_GUIDE.md) |
 | Auditoría completa | [`docs/audit/BUILD_INPUT.md`](docs/audit/BUILD_INPUT.md) |
 | Resumen de la sesión BUILD | [`docs/audit/BUILD_SUMMARY.md`](docs/audit/BUILD_SUMMARY.md) |
