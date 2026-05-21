@@ -1,0 +1,38 @@
+# Bridge between MoveIt and the ros2_control joint trajectory controller that
+# drives the UR5e in Gazebo.
+#
+# Clearpath namespaces everything under /robot, so the controller's full name
+# is /robot/arm_0_joint_trajectory_controller and the action MoveIt calls is
+#   /robot/arm_0_joint_trajectory_controller/follow_joint_trajectory
+#
+# If you ever rename the controller or drop the namespace, this is the single
+# file to update.
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - /robot/arm_0_joint_trajectory_controller
+
+  /robot/arm_0_joint_trajectory_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - arm_0_shoulder_pan_joint
+      - arm_0_shoulder_lift_joint
+      - arm_0_elbow_joint
+      - arm_0_wrist_1_joint
+      - arm_0_wrist_2_joint
+      - arm_0_wrist_3_joint
+
+# Tolerances for trajectory execution. Generous values because the simulated
+# controller can lag slightly behind MoveIt's timing, and the arm sags a touch
+# under gravity between planning and execution.
+trajectory_execution:
+  allowed_execution_duration_scaling: 1.5
+  allowed_goal_duration_margin: 0.5
+  # Max deviation (rad) between the trajectory start and the live robot state.
+  # 0.1 rad ≈ 5.7°: absorbs gravity sag / sim jitter without masking a real
+  # mismatch. Use RViz's "Plan & Execute" so there is no drift window at all.
+  allowed_start_tolerance: 0.1

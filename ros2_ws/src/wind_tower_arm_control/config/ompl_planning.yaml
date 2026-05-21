@@ -1,0 +1,44 @@
+# OMPL planning pipeline for the UR5e planning group "arm_0".
+#
+# The top-level keys declare the pipeline itself. MoveIt 2 (Jazzy) ABORTS at
+# startup if `planning_plugins` is missing or empty — keep these three blocks.
+#   - planning_plugins : the motion planner library
+#   - request_adapters : run before planning (fix/validate the request)
+#   - response_adapters: run after planning (time-parameterise/validate path)
+# The planner_configs + per-group block below tune the actual planning.
+
+planning_plugins:
+  - ompl_interface/OMPLPlanner
+
+request_adapters:
+  - default_planning_request_adapters/ResolveConstraintFrames
+  - default_planning_request_adapters/ValidateWorkspaceBounds
+  - default_planning_request_adapters/CheckStartStateBounds
+  - default_planning_request_adapters/CheckStartStateCollision
+
+response_adapters:
+  - default_planning_response_adapters/AddTimeOptimalParameterization
+  - default_planning_response_adapters/ValidateSolution
+  - default_planning_response_adapters/DisplayMotionPath
+
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0          # 0.0 lets OMPL auto-pick the extension range
+  RRTstarkConfigDefault:
+    type: geometric::RRTstar
+    range: 0.0
+    goal_bias: 0.05
+    delay_collision_checking: 1
+  PRMkConfigDefault:
+    type: geometric::PRM
+    max_nearest_neighbors: 10
+
+arm_0:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+    - RRTstarkConfigDefault
+    - PRMkConfigDefault
+  projection_evaluator: joints(arm_0_shoulder_pan_joint,arm_0_shoulder_lift_joint)
+  longest_valid_segment_fraction: 0.005
