@@ -8,7 +8,7 @@ synthetic_capture:
 
     # Path to the YAML produced by ``generate_synthetic_world``. Must be set
     # (the node refuses to start without it).
-    ground_truth_path: ~/wind_tower_synthetic/defects_ground_truth.yaml
+    ground_truth_path: ~/ROS2_Wind_Tower_Inspection/ros2_ws/src/wind_tower_simulation/worlds/defects_ground_truth.yaml
 
     output_dir: ~/wind_tower_dataset
 

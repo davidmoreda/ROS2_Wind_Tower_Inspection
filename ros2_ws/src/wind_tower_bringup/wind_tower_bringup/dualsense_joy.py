@@ -36,7 +36,13 @@ from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from std_msgs.msg import Bool
 
-DEVICE_PATH = '/dev/input/event0'
+DEFAULT_DEVICE_PATH = 'auto'
+DUALSENSE_NAME_HINTS = (
+    'DualSense',
+    'Wireless Controller',
+    'Sony Interactive Entertainment',
+    'PlayStation',
+)
 
 # Mapeo evdev ABS real del DualSense en Linux HID (verificado con evdev):
 # ABS_Z  = stick der X  (center ~127)
@@ -93,7 +99,9 @@ class DualSenseJoy(Node):
     def __init__(self):
         super().__init__('dualsense_joy')
 
+        self.declare_parameter('device_path', DEFAULT_DEVICE_PATH)
         self.declare_parameter('autonomous_stop_button_index', 2)
+        self._device_path = str(self.get_parameter('device_path').value)
         self._autonomous_stop_button_index = int(
             self.get_parameter('autonomous_stop_button_index').value)
 
@@ -107,7 +115,8 @@ class DualSenseJoy(Node):
         self.create_timer(0.1, self._active_lock_timer)
 
         try:
-            self._dev = evdev.InputDevice(DEVICE_PATH)
+            resolved_device_path = self._resolve_device_path(self._device_path)
+            self._dev = evdev.InputDevice(resolved_device_path)
             # capabilities() devuelve {type: [(code, AbsInfo), ...]}, no un dict
             abs_codes = {
                 code for code, _ in self._dev.capabilities().get(ecodes.EV_ABS, [])
@@ -117,13 +126,34 @@ class DualSenseJoy(Node):
                 for code in ABS_MAP
                 if code in abs_codes
             }
-            self.get_logger().info(f'DualSense conectado: {self._dev.name}')
+            self.get_logger().info(
+                f'DualSense conectado: {self._dev.name} ({self._dev.path})')
         except Exception as e:
-            self.get_logger().error(f'No se puede abrir {DEVICE_PATH}: {e}')
+            self.get_logger().error(
+                f'No se puede abrir mando DualSense ({self._device_path}): {e}')
             raise
 
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
+
+    def _resolve_device_path(self, configured_path: str) -> str:
+        if configured_path and configured_path != 'auto':
+            return configured_path
+
+        candidates = []
+        for path in evdev.list_devices():
+            try:
+                dev = evdev.InputDevice(path)
+            except OSError:
+                continue
+            candidates.append(f'{path}: {dev.name}')
+            if any(hint in dev.name for hint in DUALSENSE_NAME_HINTS):
+                return path
+
+        candidate_text = ', '.join(candidates) if candidates else 'ninguno'
+        raise RuntimeError(
+            'No se ha encontrado un DualSense en /dev/input. '
+            f'Dispositivos vistos: {candidate_text}')
 
     def _read_loop(self):
         for event in self._dev.read_loop():
