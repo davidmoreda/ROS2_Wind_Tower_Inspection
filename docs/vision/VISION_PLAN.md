@@ -44,14 +44,41 @@ Con 20 defectos × 5 offsets axiales = **100 posiciones**. A ~3 frames/posición
 # En cada terminal nueva, siempre primero:
 cd ~/ROS2_Wind_Tower_Inspection/ros2_ws
 ai-on
+source /opt/ai-venv/bin/activate
+source /opt/ros/jazzy/setup.bash
+export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ```
 
-> `ai-on` exporta `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`, `GALLIUM_DRIVER=d3d12`, sourcea ROS 2 Jazzy y el workspace.
+> `ai-on` exporta `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`, `GALLIUM_DRIVER=d3d12`, sourcea ROS 2 Jazzy y activa el entorno del curso. Para YOLO usamos explícitamente `/opt/ai-venv`, porque ahí está instalado `ultralytics`.
 
 ```bash
-# Compilar incluyendo el paquete de percepción
+# Comprobar dependencias Python de visión
+python3 -c "import ultralytics, torch, cv2, rclpy; print('vision deps ok')"
+```
+
+Si falla `ultralytics`, no reinstalar a ciegas sobre `/opt/ai-venv`: puede fallar
+por permisos. Primero comprobar:
+
+```bash
+/opt/ai-venv/bin/python3 -c "import ultralytics; print(ultralytics.__version__)"
+```
+
+Si el paquete existe ahí, continuar con la compilación usando `python3 -m colcon`.
+
+```bash
+# Compilar el paquete de percepción con el Python del venv.
+# Esto hace que los ejecutables instalados apunten a /opt/ai-venv/bin/python3.
 export PYTHONPATH=/usr/lib/python3/dist-packages:${PYTHONPATH:-}
-colcon build --packages-select \
+python3 -m colcon build --packages-select \
+    wind_tower_perception
+source install/setup.bash
+```
+
+Para compilar también el resto del MVP:
+
+```bash
+export PYTHONPATH=/usr/lib/python3/dist-packages:${PYTHONPATH:-}
+python3 -m colcon build --packages-select \
     wind_tower_simulation \
     wind_tower_description \
     wind_tower_bringup \
@@ -63,20 +90,32 @@ source install/setup.bash
 
 Si es la primera vez o hay dependencias pendientes:
 ```bash
-colcon build --packages-up-to wind_tower_perception
+export PYTHONPATH=/usr/lib/python3/dist-packages:${PYTHONPATH:-}
+python3 -m colcon build --packages-up-to wind_tower_perception
 source install/setup.bash
 ```
 
-Instalar `ultralytics` si no está (necesario para YOLO):
+Verificación final:
 ```bash
-pip install ultralytics
+head -1 install/wind_tower_perception/lib/wind_tower_perception/detector
+ros2 run wind_tower_perception train_yolo --help
 ```
+
+La primera línea debe ser `#!/opt/ai-venv/bin/python3`.
 
 ---
 
 ## Fase 2 — Captura automática del dataset
 
-Necesitas **3 terminales**. En cada una ejecutar primero `cd ~/ROS2_Wind_Tower_Inspection/ros2_ws && ai-on && source install/setup.bash`.
+Necesitas **3 terminales**. En cada una ejecutar primero:
+
+```bash
+cd ~/ROS2_Wind_Tower_Inspection/ros2_ws
+ai-on
+source /opt/ai-venv/bin/activate
+source install/setup.bash
+export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
+```
 
 No se necesita el DualSense. No se necesita `inspection.launch.py`.
 
@@ -149,7 +188,9 @@ cp ~/ROS2_Wind_Tower_Inspection/ros2_ws/src/wind_tower_perception/config/dataset
 
 # Entrenar
 cd ~/ROS2_Wind_Tower_Inspection/ros2_ws && ai-on
-python3 -m wind_tower_perception.scripts.train_yolo \
+source /opt/ai-venv/bin/activate
+source install/setup.bash
+ros2 run wind_tower_perception train_yolo \
     --dataset ~/wind_tower_dataset/dataset.yaml \
     --weights yolov8n.pt \
     --epochs 80 \
@@ -197,6 +238,7 @@ ros2 launch wind_tower_bringup simulation.launch.py
 **Terminal 2 — Percepción con YOLO**:
 ```bash
 cd ~/ROS2_Wind_Tower_Inspection/ros2_ws && ai-on
+source /opt/ai-venv/bin/activate
 source install/setup.bash
 export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ros2 launch wind_tower_perception perception.launch.py \
