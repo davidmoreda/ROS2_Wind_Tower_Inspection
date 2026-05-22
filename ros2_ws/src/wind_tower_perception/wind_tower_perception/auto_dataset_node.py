@@ -41,7 +41,10 @@ class AutoDatasetNode(Node):
 
         self.declare_parameter('ground_truth_path', '')
         self.declare_parameter('world_name', 'wind_tower_world')
-        self.declare_parameter('robot_name', 'robot')
+        # Clearpath names the Gazebo model as "<namespace>/robot".
+        # The project robot.yaml uses namespace "robot", so the model is
+        # "robot/robot" rather than plain "robot".
+        self.declare_parameter('robot_name', 'robot/robot')
         # Robot stays at the bottom of the tube: X=0, Z=0.3, yaw=π/2 (+Y)
         self.declare_parameter('robot_x', 0.0)
         self.declare_parameter('robot_z', 0.3)

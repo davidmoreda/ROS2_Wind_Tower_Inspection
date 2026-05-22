@@ -156,8 +156,14 @@ source install/setup.bash
 export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ros2 run wind_tower_perception auto_dataset \
     --ros-args \
-    -p ground_truth_path:=$HOME/ROS2_Wind_Tower_Inspection/ros2_ws/src/wind_tower_simulation/worlds/defects_ground_truth.yaml
+    -p ground_truth_path:=$HOME/ROS2_Wind_Tower_Inspection/ros2_ws/src/wind_tower_simulation/worlds/defects_ground_truth.yaml \
+    -p robot_name:=robot/robot
 ```
+
+El modelo de Gazebo se llama `robot/robot`, no `robot`, porque Clearpath deriva
+el nombre de `namespace: robot` en `robot.yaml`. Si Gazebo muestra
+`Unable to update the pose for entity id:[0], name[robot]`, se está usando el
+nombre antiguo.
 
 El nodo recorre los ~100 positions en ~3–4 min y termina solo. Puedes ver el progreso en el log:
 ```
