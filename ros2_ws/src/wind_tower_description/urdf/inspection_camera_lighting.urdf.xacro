@@ -59,7 +59,8 @@
   <joint name="inspection_camera_optical_joint" type="fixed">
     <parent link="inspection_camera_lens_link"/>
     <child link="inspection_camera_optical_frame"/>
-    <origin xyz="0.06 0 0" rpy="0 0 0"/>
+    <!-- ROS optical frame: Z forward along the lens, X right, Y down. -->
+    <origin xyz="0.06 0 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
 
   <link name="inspection_light_left_link">

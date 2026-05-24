@@ -1,10 +1,11 @@
 # YOLOv8 dataset descriptor for the wind-tower defect dataset.
 #
 # This file is meant to live INSIDE the dataset directory produced by
-# ``synthetic_capture_node`` (default: ``~/wind_tower_dataset``). Copy it
-# there before training:
+# ``synthetic_capture_node`` (default:
+# ``~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset``).
+# Copy it there before training:
 #
-#   cp src/wind_tower_perception/config/dataset.yaml ~/wind_tower_dataset/
+#   cp src/wind_tower_perception/config/dataset.yaml datasets/wind_tower_dataset/
 #
 # ``path`` is a relative anchor; ``train`` and ``val`` are resolved against it.
 # Ultralytics also tolerates absolute paths if you prefer.

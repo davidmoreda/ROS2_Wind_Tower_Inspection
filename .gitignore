@@ -55,6 +55,9 @@ CONVERSATION_LESSONS.md
 # Local debug captures
 debug_runs/
 
+# Local generated datasets
+ros2_ws/datasets/
+
 # Documentación histórica archivada (privada, no en GitHub)
 docs/legacy/
 

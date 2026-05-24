@@ -138,7 +138,7 @@ def generate_launch_description():
             description='Clearpath setup dir with robot.urdf.xacro + robot.srdf.',
         ),
         DeclareLaunchArgument(
-            'use_rviz', default_value='true',
+            'use_rviz', default_value='false',
             description='Launch RViz with the MoveIt MotionPlanning panel.',
         ),
         DeclareLaunchArgument(
@@ -146,7 +146,7 @@ def generate_launch_description():
             description='Use the Gazebo /clock.',
         ),
         DeclareLaunchArgument(
-            'use_octomap', default_value='true',
+            'use_octomap', default_value='false',
             description=(
                 'Wire the Velodyne point cloud into the MoveIt occupancy_map '
                 'monitor so the planner avoids what the LiDAR sees.'),

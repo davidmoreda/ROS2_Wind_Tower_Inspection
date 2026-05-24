@@ -10,14 +10,16 @@ The dataset is expected to follow YOLO's standard layout:
       labels/val/*.txt
       dataset.yaml       (paths + class names)
 
-If you ran ``synthetic_capture_node`` with ``output_dir=~/wind_tower_dataset``
-and copied the package's ``config/dataset.yaml`` to that directory, the
-defaults below already point at the right place.
+If you ran ``synthetic_capture_node`` with the project default output directory
+and copied the package's ``config/dataset.yaml`` there, the dataset remains
+inside the workspace:
+
+    ~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset/
 
 Usage::
 
     python -m wind_tower_perception.scripts.train_yolo \\
-        --dataset ~/wind_tower_dataset/dataset.yaml \\
+        --dataset ~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset/dataset.yaml \\
         --epochs 80 --imgsz 640 --weights yolov8n.pt
 """
 
