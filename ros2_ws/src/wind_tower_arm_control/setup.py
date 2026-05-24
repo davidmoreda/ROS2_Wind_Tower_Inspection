@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/move_group.launch.py',
+            'launch/arm_control.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/kinematics.yaml',
@@ -19,7 +20,9 @@ setup(
             'config/joint_limits.yaml',
             'config/moveit_controllers.yaml',
             'config/pilz_cartesian_limits.yaml',
+            'config/sensors_3d.yaml',
             'config/moveit.rviz',
+            'config/arm_inspection_params.yaml',
         ]),
     ],
     install_requires=['setuptools'],
@@ -38,7 +41,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # arm_inspection_node is added in F3.
+            'arm_inspection = '
+            'wind_tower_arm_control.arm_inspection_node:main',
         ],
     },
 )

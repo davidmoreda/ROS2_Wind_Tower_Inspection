@@ -1,0 +1,71 @@
+arm_inspection:
+  ros__parameters:
+    # --- Coordination topics (contract, TEAM_WORKFLOW.md §3) ---------------
+    state_text_topic: /inspection/state_text
+    autonomous_active_topic: /inspection/autonomous_active
+    joint_states_topic: /robot/platform/joint_states
+    move_group_action: /move_action
+    planning_group: arm_0
+
+    joint_names:
+      - arm_0_shoulder_pan_joint
+      - arm_0_shoulder_lift_joint
+      - arm_0_elbow_joint
+      - arm_0_wrist_1_joint
+      - arm_0_wrist_2_joint
+      - arm_0_wrist_3_joint
+
+    # If true, the node stays PASSIVE (does not command the arm) whenever
+    # /inspection/autonomous_active is false — so it never fights ps5_teleop,
+    # and so you can freely jog the arm to capture the base pose.
+    require_autonomous_active: true
+    publish_rate_hz: 5.0
+
+    # --- Planning -----------------------------------------------------------
+    velocity_scaling: 0.15
+    acceleration_scaling: 0.15
+    planning_time_s: 5.0
+    planning_attempts: 10
+    joint_goal_tolerance_rad: 0.01
+    retry_cooldown_s: 3.0
+
+    # --- Mission state -> arm behaviour ------------------------------------
+    # Parallel lists. Behaviour is one of: home, hold_lookat, sweep.
+    mission_states:     [AXIAL_SCAN,  INDEX_TUBE,  DETAIL_SCAN, IDLE]
+    mission_behaviours: [hold_lookat, hold_lookat, sweep,       home]
+    default_behaviour: home
+
+    # --- Poses (joint order = joint_names, radians) ------------------------
+    # home: pose in which the camera faces forward (Dani's "default" pose).
+    # = [0, -56, 50, -181, 0, 34] degrees -> radians:
+    home_joint_positions: [0.0000, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]
+
+    # hold_lookat: pose held during AXIAL_SCAN / INDEX_TUBE. Default = same as
+    # home (camera already pointing at the wall). You can override it at
+    # runtime with: ros2 service call /arm/capture_hold_lookat std_srvs/srv/Trigger
+    # (the captured pose is persisted to hold_lookat_pose_file and overrides
+    # this value next time the node starts).
+    hold_lookat_joint_positions: [0.0000, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]
+    hold_lookat_pose_file: ~/.wind_tower_arm/hold_lookat.json
+
+    # --- Sweep waypoints ---------------------------------------------------
+    # Explicit list of poses to visit during DETAIL_SCAN. Six joint values per
+    # waypoint (in joint_names order = pan, lift, elbow, w1, w2, w3),
+    # concatenated end-to-end. With sweep_via_home=true the full run is
+    # home -> waypoint_1 -> ... -> waypoint_N -> home.
+    #
+    # Capture poses by jogging the arm in RViz (MotionPlanning -> Joints tab),
+    # checking the camera view, and reading the slider values.
+    sweep_via_home: true
+    sweep_joint_positions_flat:
+      # 7 waypoints rotating shoulder_pan through 360° in 45° steps. All
+      # other joints stay at the base pose (lift/elbow/w1/w2/w3 = home).
+      # With sweep_via_home=true the full run is:
+      #   home (pan= 0°) -> 45° -> 90° -> 135° -> 180° -> 225° -> 270° -> 315° -> home
+      [0.7854, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan =  45°
+       1.5708, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan =  90°
+       2.3562, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 135°
+       3.1416, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 180°
+       3.9270, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 225°
+       4.7124, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 270°
+       5.4978, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]   # pan = 315°

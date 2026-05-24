@@ -38,6 +38,11 @@ def _launch_setup(context, *args, **kwargs):
     use_rviz = LaunchConfiguration('use_rviz')
     use_sim_time = (
         LaunchConfiguration('use_sim_time').perform(context).lower() == 'true')
+    use_octomap = (
+        LaunchConfiguration('use_octomap').perform(context).lower() == 'true')
+    octomap_frame = LaunchConfiguration('octomap_frame').perform(context)
+    octomap_resolution = float(
+        LaunchConfiguration('octomap_resolution').perform(context))
 
     pkg_share = get_package_share_directory('wind_tower_arm_control')
     config_dir = os.path.join(pkg_share, 'config')
@@ -53,7 +58,7 @@ def _launch_setup(context, *args, **kwargs):
                 'setup_path:=<dir containing robot.urdf.xacro and robot.srdf>.'
             )
 
-    moveit_config = (
+    builder = (
         MoveItConfigsBuilder('a200-0000', package_name='wind_tower_arm_control')
         .robot_description(file_path=urdf_xacro)
         .robot_description_semantic(file_path=srdf_file)
@@ -71,7 +76,19 @@ def _launch_setup(context, *args, **kwargs):
             publish_state_updates=True,
             publish_transforms_updates=True,
         )
-        .to_moveit_configs()
+    )
+    if use_octomap:
+        # Wire the Velodyne LiDAR into the occupancy_map_monitor so the
+        # planner sees the tube wall (and anything else in front of it) as
+        # collision geometry.
+        builder = builder.sensors_3d(
+            file_path=os.path.join(config_dir, 'sensors_3d.yaml'))
+    moveit_config = builder.to_moveit_configs()
+
+    extra_octomap_params = (
+        {'octomap_frame': octomap_frame,
+         'octomap_resolution': octomap_resolution}
+        if use_octomap else {}
     )
 
     move_group_node = Node(
@@ -84,6 +101,7 @@ def _launch_setup(context, *args, **kwargs):
             {'use_sim_time': use_sim_time},
             {'publish_robot_description': True,
              'publish_robot_description_semantic': True},
+            extra_octomap_params,
         ],
         # Clearpath's joint_state_broadcaster publishes the full robot joint
         # state (platform + arm) on /robot/platform/joint_states, so the
@@ -126,6 +144,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'use_sim_time', default_value='true',
             description='Use the Gazebo /clock.',
+        ),
+        DeclareLaunchArgument(
+            'use_octomap', default_value='true',
+            description=(
+                'Wire the Velodyne point cloud into the MoveIt occupancy_map '
+                'monitor so the planner avoids what the LiDAR sees.'),
+        ),
+        DeclareLaunchArgument(
+            'octomap_frame', default_value='odom',
+            description='Fixed frame in which the octomap is built.',
+        ),
+        DeclareLaunchArgument(
+            'octomap_resolution', default_value='0.05',
+            description='Octomap voxel size in metres (smaller = finer + slower).',
         ),
         OpaqueFunction(function=_launch_setup),
     ])
