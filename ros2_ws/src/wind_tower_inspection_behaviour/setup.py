@@ -10,15 +10,6 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/' + package_name + '/launch', [
-            'launch/inspection.launch.py',
-        ]),
-        ('share/' + package_name + '/config', [
-            'config/inspection_params.yaml',
-            'config/stability_monitor.yaml',
-            'config/state_machine.yaml',
-            'config/heading_ekf.yaml',
-        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -33,9 +24,6 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'cylindrical_map = wind_tower_inspection_behaviour.cylindrical_map_node:main',
-            'stability_monitor = wind_tower_inspection_behaviour.stability_monitor_node:main',
-            'state_machine = wind_tower_inspection_behaviour.state_machine_node:main',
         ],
     },
 )

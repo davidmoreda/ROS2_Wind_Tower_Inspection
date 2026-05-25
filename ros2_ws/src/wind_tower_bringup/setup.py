@@ -12,9 +12,15 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', [
             'launch/simulation.launch.py',
+            'launch/slam.launch.py',
+            'launch/navigation.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/robot.yaml',
+            'config/pointcloud_to_laserscan.yaml',
+            'config/slam_params.yaml',
+            'config/ekf_map.yaml',
+            'config/nav2_params.yaml',
         ]),
     ],
     install_requires=['setuptools'],
@@ -34,7 +40,6 @@ setup(
             'dualsense_joy = wind_tower_bringup.dualsense_joy:main',
             'tf_static_relay = wind_tower_bringup.tf_static_relay:main',
             'turner_node = wind_tower_bringup.turner_node:main',
-            'cylinder_localizer = wind_tower_bringup.cylinder_localizer_node:main',
         ],
     },
 )

@@ -1,0 +1,19 @@
+pointcloud_to_laserscan_node:
+  ros__parameters:
+    # Transforma la nube al frame base antes de filtrar altura
+    target_frame: base_link
+    transform_tolerance: 0.05
+
+    # Slice horizontal: 0.10–0.75 m sobre base_link
+    # Captura paredes, barreras (1.2 m) y viradores pero ignora suelo
+    min_height:  0.10
+    max_height:  0.75
+
+    angle_min: -3.14159265
+    angle_max:  3.14159265
+    angle_increment: 0.008726646   # 0.5 grados
+    scan_time: 0.1                  # 10 Hz — coincide con VLP-16
+    range_min: 0.5
+    range_max: 25.0
+    use_inf: true
+    inf_epsilon: 1.0
