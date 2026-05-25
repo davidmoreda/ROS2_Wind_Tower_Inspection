@@ -16,7 +16,7 @@
 | Proyección pixel → (x_axial, θ) | `defect_mapper_node.py` | ✅ |
 | Script de entrenamiento YOLO11 | `scripts/train_yolo.py` | ✅ |
 | Informe post-misión con Claude API | `scripts/generate_inspection_report.py` | ✅ |
-| Overlay posición en imagen anotada | `defect_mapper_node.py` | ❌ pendiente |
+| Overlay posición en imagen anotada | `defect_mapper_node.py` | ✅ |
 
 ---
 
@@ -144,9 +144,9 @@ Pesos resultantes: `~/wind_tower_runs/wind_tower_defects/weights/best.pt`
 
 ---
 
-## Fase 4 — Detección con posición en imagen ❌ pendiente
+## Fase 4 — Detección con posición en imagen ✅
 
-**Qué falta:** modificar `defect_mapper_node.py` para suscribirse a `/inspection/detections/image_annotated`, superponer `x=Xm θ=Y°` sobre cada bbox y publicar `/inspection/defects/image_position`.
+`defect_mapper_node.py` suscrito a `/inspection/detections/image_annotated`, superpone `x=Xm θ=Y°` sobre cada bbox y publica `/inspection/defects/image_position`.
 
 **Lanzamiento misión real con YOLO (3 terminales):**
 

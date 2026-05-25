@@ -52,7 +52,7 @@ defect_mapper:
       axis_origin_x_m: 0.0
       axis_origin_y_m: 0.0
       axis_origin_z_m: 4.0
-      axis_direction: y
+      axis_direction: "y"
       radius_m: 3.925
       x_axial_offset_m: 0.0
 
