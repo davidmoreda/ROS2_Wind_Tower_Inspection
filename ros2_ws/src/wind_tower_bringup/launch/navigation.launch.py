@@ -57,6 +57,9 @@ def generate_launch_description():
         parameters=[
             os.path.join(pkg_bringup, 'config', 'pointcloud_to_laserscan.yaml'),
             {'use_sim_time': use_sim_time},
+            {'qos_overrides./scan.publisher.reliability': 'reliable'},
+            {'qos_overrides./scan.publisher.history':     'keep_last'},
+            {'qos_overrides./scan.publisher.depth':       10},
         ],
         remappings=[
             ('cloud_in', '/velodyne_points'),
