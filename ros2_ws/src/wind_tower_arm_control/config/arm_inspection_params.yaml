@@ -18,8 +18,25 @@ arm_inspection:
     # If true, the node stays PASSIVE (does not command the arm) whenever
     # /inspection/autonomous_active is false — so it never fights ps5_teleop,
     # and so you can freely jog the arm to capture the base pose.
+    # (The joy override below is INDEPENDENT and bypasses this gate.)
     require_autonomous_active: true
     publish_rate_hz: 5.0
+
+    # --- PS5 DualSense bindings -------------------------------------------
+    # Direct buttons on the pad to drive the arm without going through the
+    # mission state machine. The override bypasses require_autonomous_active,
+    # so they work even with autonomous off — which is the natural setup for
+    # manual joy control, because dualsense_joy in wind_tower_bringup masks
+    # every button except STOP (Circle) when autonomous is true. Pressing
+    # autonomous_active=true clears the override automatically.
+    #
+    # Indices below match Dani's machine (kernel-specific evdev mapping):
+    #   R1       = btn 2 -> HOME
+    #   Triangle = btn 3 -> SWEEP (inspection)
+    enable_joy_control: true
+    joy_topic: /robot/joy_teleop/joy
+    joy_button_home: 2       # R1
+    joy_button_sweep: 3      # Triangle
 
     # --- Planning -----------------------------------------------------------
     velocity_scaling: 0.15

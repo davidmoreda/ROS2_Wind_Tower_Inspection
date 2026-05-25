@@ -58,7 +58,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy._rclpy_pybind11 import RCLError
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import JointState, Joy
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
@@ -93,6 +93,10 @@ class ArmInspectionNode(Node):
         self._sweep_done: bool = False
         self._server_warned: bool = False
         self._hold_lookat_source: str = 'parameter'
+        # Joy override: when set, takes precedence over mission_state and the
+        # autonomous_active gate (manual pad control).
+        self._joy_override: Optional[str] = None
+        self._last_buttons: Optional[List[int]] = None
 
         # If a base pose was captured in a previous run, use it.
         loaded = self._load_hold_lookat_file()
@@ -114,6 +118,9 @@ class ArmInspectionNode(Node):
             Bool, self._autonomous_topic, self._autonomous_cb, 10)
         self.create_subscription(
             JointState, self._joint_states_topic, self._joint_states_cb, 10)
+        if self._enable_joy:
+            self.create_subscription(
+                Joy, self._joy_topic, self._joy_cb, 10)
 
         self.create_service(
             Trigger, '/arm/capture_hold_lookat', self._capture_cb)
@@ -124,7 +131,9 @@ class ArmInspectionNode(Node):
             f'Arm inspection node ready (group={self._planning_group}, '
             f'hold_lookat from {self._hold_lookat_source}, '
             f'{len(self._sweep_waypoints)} sweep waypoints, '
-            f'{len(self._sweep_sequence)} total poses).'
+            f'{len(self._sweep_sequence)} total poses, '
+            f'joy={"on" if self._enable_joy else "off"} '
+            f'[btn{self._joy_button_home}=home, btn{self._joy_button_sweep}=sweep]).'
         )
 
     # ------------------------------------------------------------------ params
@@ -148,6 +157,19 @@ class ArmInspectionNode(Node):
 
         self.declare_parameter('require_autonomous_active', True)
         self.declare_parameter('publish_rate_hz', 5.0)
+
+        # PS5 DualSense bindings (via the dualsense_joy driver in
+        # wind_tower_bringup). When the user presses one of these buttons,
+        # the joy override drives the arm DIRECTLY, bypassing the mission-
+        # state mapping and the require_autonomous_active gate. Note that
+        # dualsense_joy masks every button except STOP when
+        # /inspection/autonomous_active is true, so manual joy bindings only
+        # work while autonomous is OFF (which is the natural state for joy
+        # control). Defaults match the indices Dani observed: R1=2, Δ=3.
+        self.declare_parameter('enable_joy_control', True)
+        self.declare_parameter('joy_topic', '/robot/joy_teleop/joy')
+        self.declare_parameter('joy_button_home', 2)    # R1
+        self.declare_parameter('joy_button_sweep', 3)   # Triangle
 
         self.declare_parameter('velocity_scaling', 0.15)
         self.declare_parameter('acceleration_scaling', 0.15)
@@ -210,6 +232,14 @@ class ArmInspectionNode(Node):
             self.get_parameter('require_autonomous_active').value)
         self._publish_rate_hz = max(
             1.0, float(self.get_parameter('publish_rate_hz').value))
+
+        self._enable_joy = bool(
+            self.get_parameter('enable_joy_control').value)
+        self._joy_topic = str(self.get_parameter('joy_topic').value)
+        self._joy_button_home = int(
+            self.get_parameter('joy_button_home').value)
+        self._joy_button_sweep = int(
+            self.get_parameter('joy_button_sweep').value)
 
         self._vel_scaling = float(self.get_parameter('velocity_scaling').value)
         self._acc_scaling = float(
@@ -303,7 +333,47 @@ class ArmInspectionNode(Node):
         self._mission_state = str(msg.data).strip() or 'UNKNOWN'
 
     def _autonomous_cb(self, msg: Bool):
-        self._autonomous_active = bool(msg.data)
+        new_state = bool(msg.data)
+        if new_state and not self._autonomous_active and self._joy_override is not None:
+            # Mission takes over → drop any manual joy override so the
+            # mission_state mapping drives the arm again.
+            self.get_logger().info(
+                'autonomous_active enabled; clearing joy override.')
+            self._joy_override = None
+            self._commanded = None
+        self._autonomous_active = new_state
+
+    def _joy_cb(self, msg: Joy):
+        buttons = list(msg.buttons)
+        if self._last_buttons is None:
+            self._last_buttons = buttons
+            return
+
+        def rising(idx: int) -> bool:
+            return (
+                0 <= idx < len(buttons)
+                and 0 <= idx < len(self._last_buttons)
+                and buttons[idx] == 1
+                and self._last_buttons[idx] == 0
+            )
+
+        if rising(self._joy_button_home):
+            self._trigger_joy_override(
+                HOME, f'home button (btn{self._joy_button_home})')
+        if rising(self._joy_button_sweep):
+            self._trigger_joy_override(
+                SWEEP, f'sweep button (btn{self._joy_button_sweep})')
+
+        self._last_buttons = buttons
+
+    def _trigger_joy_override(self, behaviour: str, label: str):
+        self.get_logger().info(f'Joy {label} -> {behaviour}')
+        self._joy_override = behaviour
+        # Force the tick to re-issue (also lets the SWEEP one-shot re-fire on
+        # every R1 press).
+        self._commanded = None
+        self._behaviour_reached = False
+        self._sweep_done = False
 
     def _joint_states_cb(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))
@@ -371,6 +441,10 @@ class ArmInspectionNode(Node):
                     pose, lambda ok: self._on_pose_done(desired, ok))
 
     def _compute_desired_behaviour(self) -> str:
+        # Manual joy override wins over everything else: lets the user run
+        # L1=home or R1=sweep without enabling autonomous mode.
+        if self._joy_override is not None:
+            return self._joy_override
         if self._require_autonomous and not self._autonomous_active:
             return PASSIVE
         return self._state_behaviour.get(
@@ -524,6 +598,7 @@ class ArmInspectionNode(Node):
             'mission_state': self._mission_state,
             'autonomous_active': self._autonomous_active,
             'hold_lookat_source': self._hold_lookat_source,
+            'joy_override': self._joy_override,
             'sweep_index': (
                 self._sweep_index if self._commanded == SWEEP else None),
             'sweep_total': len(self._sweep_sequence),

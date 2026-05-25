@@ -58,7 +58,7 @@ def _launch_setup(context, *args, **kwargs):
                 'setup_path:=<dir containing robot.urdf.xacro and robot.srdf>.'
             )
 
-    builder = (
+    moveit_config = (
         MoveItConfigsBuilder('a200-0000', package_name='wind_tower_arm_control')
         .robot_description(file_path=urdf_xacro)
         .robot_description_semantic(file_path=srdf_file)
@@ -76,33 +76,34 @@ def _launch_setup(context, *args, **kwargs):
             publish_state_updates=True,
             publish_transforms_updates=True,
         )
+        .to_moveit_configs()
     )
-    if use_octomap:
-        # Wire the Velodyne LiDAR into the occupancy_map_monitor so the
-        # planner sees the tube wall (and anything else in front of it) as
-        # collision geometry.
-        builder = builder.sensors_3d(
-            file_path=os.path.join(config_dir, 'sensors_3d.yaml'))
-    moveit_config = builder.to_moveit_configs()
 
-    extra_octomap_params = (
-        {'octomap_frame': octomap_frame,
-         'octomap_resolution': octomap_resolution}
-        if use_octomap else {}
-    )
+    # Sensors_3d / octomap: pass the YAML file directly as a parameter file
+    # (the "named sensor" format inside it is the only one ROS 2 params can
+    # represent). The file is intentionally NOT named sensors_3d.yaml so
+    # MoveItConfigsBuilder does not auto-discover and reparse it with its
+    # legacy list-of-dicts loader (which crashes ROS 2 parameter handling).
+    move_group_params = [
+        moveit_config.to_dict(),
+        {'use_sim_time': use_sim_time},
+        {'publish_robot_description': True,
+         'publish_robot_description_semantic': True},
+    ]
+    if use_octomap:
+        move_group_params.append(
+            os.path.join(config_dir, 'octomap_sensors.yaml'))
+        move_group_params.append({
+            'octomap_frame': octomap_frame,
+            'octomap_resolution': octomap_resolution,
+        })
 
     move_group_node = Node(
         package='moveit_ros_move_group',
         executable='move_group',
         name='move_group',
         output='screen',
-        parameters=[
-            moveit_config.to_dict(),
-            {'use_sim_time': use_sim_time},
-            {'publish_robot_description': True,
-             'publish_robot_description_semantic': True},
-            extra_octomap_params,
-        ],
+        parameters=move_group_params,
         # Clearpath's joint_state_broadcaster publishes the full robot joint
         # state (platform + arm) on /robot/platform/joint_states, so the
         # planning scene monitor's current-state monitor must subscribe there.

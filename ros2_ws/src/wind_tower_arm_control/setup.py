@@ -20,7 +20,7 @@ setup(
             'config/joint_limits.yaml',
             'config/moveit_controllers.yaml',
             'config/pilz_cartesian_limits.yaml',
-            'config/sensors_3d.yaml',
+            'config/octomap_sensors.yaml',
             'config/moveit.rviz',
             'config/arm_inspection_params.yaml',
         ]),
