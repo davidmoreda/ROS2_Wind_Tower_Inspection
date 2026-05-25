@@ -4,10 +4,11 @@ pointcloud_to_laserscan_node:
     target_frame: base_link
     transform_tolerance: 0.5
 
-    # Slice horizontal: 0.10–0.75 m sobre base_link
-    # Captura paredes, barreras (1.2 m) y viradores pero ignora suelo
-    min_height:  0.10
-    max_height:  0.75
+    # Slice horizontal: 0.45–0.80 m sobre base_link
+    # 0.45: ignora la rampa (altura máx ~0.40 m) y el suelo inclinado
+    # Obstáculos relevantes (barreras 1.2m, viradores 0.8m) siguen detectados
+    min_height:  0.45
+    max_height:  0.80
 
     angle_min: -3.14159265
     angle_max:  3.14159265

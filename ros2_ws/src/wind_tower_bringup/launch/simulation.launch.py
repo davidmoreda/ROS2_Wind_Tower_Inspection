@@ -280,28 +280,28 @@ def generate_launch_description():
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_linear.x', '0.15',
+                    'scale_linear.x', '0.50',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_angular.yaw', '0.08',
+                    'scale_angular.yaw', '0.40',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_linear_turbo.x', '0.30',
+                    'scale_linear_turbo.x', '0.90',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_angular_turbo.yaw', '0.15',
+                    'scale_angular_turbo.yaw', '0.70',
                 ],
                 output='screen',
             ),

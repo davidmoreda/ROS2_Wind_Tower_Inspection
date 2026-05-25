@@ -21,6 +21,8 @@ setup(
             'config/slam_params.yaml',
             'config/ekf_map.yaml',
             'config/nav2_params.yaml',
+            'config/slam.rviz',
+            'config/navigation.rviz',
         ]),
     ],
     install_requires=['setuptools'],
@@ -40,6 +42,7 @@ setup(
             'dualsense_joy = wind_tower_bringup.dualsense_joy:main',
             'tf_static_relay = wind_tower_bringup.tf_static_relay:main',
             'turner_node = wind_tower_bringup.turner_node:main',
+            'scan_qos_bridge = wind_tower_bringup.scan_qos_bridge:main',
         ],
     },
 )
