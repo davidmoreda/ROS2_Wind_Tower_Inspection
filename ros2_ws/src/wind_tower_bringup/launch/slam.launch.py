@@ -22,7 +22,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -91,10 +91,13 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    # Espera 15 s a que el reloj de Gazebo se estabilice antes de arrancar
+    # pc2scan y slam_toolbox — evita el "jump back in time" que los deja KO
+    delayed_slam = TimerAction(period=15.0, actions=[pc2scan, slam])
+
     return LaunchDescription([
         declare_use_sim_time,
-        pc2scan,
-        slam,
         dualsense_joy,
         ps5_teleop,
+        delayed_slam,
     ])

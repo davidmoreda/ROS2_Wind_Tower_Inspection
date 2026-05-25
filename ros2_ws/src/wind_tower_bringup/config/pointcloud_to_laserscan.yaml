@@ -2,7 +2,7 @@ pointcloud_to_laserscan_node:
   ros__parameters:
     # Transforma la nube al frame base antes de filtrar altura
     target_frame: base_link
-    transform_tolerance: 0.05
+    transform_tolerance: 0.5
 
     # Slice horizontal: 0.10–0.75 m sobre base_link
     # Captura paredes, barreras (1.2 m) y viradores pero ignora suelo
