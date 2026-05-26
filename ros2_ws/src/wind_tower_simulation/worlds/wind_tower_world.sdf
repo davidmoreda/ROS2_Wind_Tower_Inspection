@@ -2,6 +2,11 @@
 <sdf version="1.7">
   <world name="wind_tower_world">
 
+    <!-- Gravedad reducida (de -9.8 a -7.5) para compensar par limitado del Husky -->
+    <!-- subiendo la rampa de 13°. Reduce ~23% el peso aparente; la tracción sigue -->
+    <!-- siendo suficiente (mu=1.3 en rampa, ruedas Husky tienen mu_ext alto). -->
+    <gravity>0 0 -7.5</gravity>
+
     <physics type="ode">
       <max_step_size>0.004</max_step_size>
       <real_time_factor>1.0</real_time_factor>
@@ -70,10 +75,10 @@
         <collision name="collision">
           <geometry><plane><normal>0 0 1</normal><size>200 200</size></plane></geometry>
           <surface>
-            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+            <friction><ode><mu>0.8</mu><mu2>0.8</mu2></ode></friction>
             <contact><ode>
-              <kp>1000000</kp><kd>100</kd>
-              <max_vel>0.5</max_vel><min_depth>0.001</min_depth>
+              <kp>500000</kp><kd>100</kd>
+              <max_vel>0.5</max_vel><min_depth>0.002</min_depth>
             </ode></contact>
           </surface>
         </collision>
@@ -206,33 +211,76 @@
     </model>
 
     <!-- ══════════════════════════════════════════════
-         SEPARADOR SUR Y=-20
-         Puerta en X=+5.5, 3 m ancha (X: 4 a 7)
+         SEPARADOR SUR Y=-20 — 3 puertas: centro (X=0) y laterales (X=±12)
+         Simétrico al separador norte para rutas alternativas Nav2
          ══════════════════════════════════════════════ -->
-    <model name="sep_south_L">
-      <static>true</static><pose>-8.0 -20 4 0 0 0</pose>
+    <!-- Segmento extremo izq: X=-20 a X=-13.5 -->
+    <model name="sep_south_LE">
+      <static>true</static><pose>-16.75 -20 4 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>24.0 0.3 8</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>24.0 0.3 8</size></box></geometry>
+        <collision name="col"><geometry><box><size>6.5 0.3 8</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>6.5 0.3 8</size></box></geometry>
           <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse><specular>0.04 0.04 0.04 1</specular></material>
         </visual>
       </link>
     </model>
-    <model name="sep_south_R">
-      <static>true</static><pose>13.5 -20 4 0 0 0</pose>
-      <link name="link">
-        <collision name="col"><geometry><box><size>13.0 0.3 8</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>13.0 0.3 8</size></box></geometry>
-          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse><specular>0.04 0.04 0.04 1</specular></material>
-        </visual>
-      </link>
-    </model>
-    <model name="sep_south_lintel">
-      <static>true</static><pose>5.5 -20 6.5 0 0 0</pose>
+    <!-- Dintel puerta izquierda (X=-12) -->
+    <model name="sep_south_lintel_L">
+      <static>true</static><pose>-12 -20 6.5 0 0 0</pose>
       <link name="link">
         <collision name="col"><geometry><box><size>3.0 0.3 3.0</size></box></geometry></collision>
         <visual name="vis"><geometry><box><size>3.0 0.3 3.0</size></box></geometry>
           <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Segmento centro-izq: X=-10.5 a X=-1.5 -->
+    <model name="sep_south_LM">
+      <static>true</static><pose>-6.0 -20 4 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>9.0 0.3 8</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>9.0 0.3 8</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse><specular>0.04 0.04 0.04 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Dintel puerta centro (X=0) -->
+    <model name="sep_south_lintel">
+      <static>true</static><pose>0 -20 6.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>3.0 0.3 3.0</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>3.0 0.3 3.0</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Segmento centro-der: X=+1.5 a X=+10.5 -->
+    <model name="sep_south_RM">
+      <static>true</static><pose>6.0 -20 4 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>9.0 0.3 8</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>9.0 0.3 8</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse><specular>0.04 0.04 0.04 1</specular></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Dintel puerta derecha (X=+12) -->
+    <model name="sep_south_lintel_R">
+      <static>true</static><pose>12 -20 6.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>3.0 0.3 3.0</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>3.0 0.3 3.0</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Segmento extremo der: X=+13.5 a X=+20 -->
+    <model name="sep_south_RE">
+      <static>true</static><pose>16.75 -20 4 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>6.5 0.3 8</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>6.5 0.3 8</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse><specular>0.04 0.04 0.04 1</specular></material>
         </visual>
       </link>
     </model>
@@ -272,12 +320,33 @@
         </visual>
       </link>
     </model>
-    <!-- Pared lateral oeste -->
-    <model name="charge_wall_W">
-      <static>true</static><pose>-4 26 2 0 0 0</pose>
+    <!-- Pared lateral oeste — con puerta lateral (Y=25 a Y=27, 2m ancho × 3m alto) -->
+    <!-- Segmento norte: Y=27 a Y=30 -->
+    <model name="charge_wall_W_N">
+      <static>true</static><pose>-4 28.5 2 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.25 8 4</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.25 8 4</size></box></geometry>
+        <collision name="col"><geometry><box><size>0.25 3 4</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 3 4</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Dintel puerta lateral oeste (Y=26, z=3 a z=4) -->
+    <model name="charge_wall_W_lintel">
+      <static>true</static><pose>-4 26 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.25 2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 2 1</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Segmento sur: Y=22 a Y=25 -->
+    <model name="charge_wall_W_S">
+      <static>true</static><pose>-4 23.5 2 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.25 3 4</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 3 4</size></box></geometry>
           <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
         </visual>
       </link>
@@ -366,11 +435,33 @@
         </visual>
       </link>
     </model>
-    <model name="ctrl_wall_E">
-      <static>true</static><pose>4 -26 2 0 0 0</pose>
+    <!-- Pared lateral este — con puerta lateral (Y=-25 a Y=-27, 2m ancho × 3m alto) -->
+    <!-- Segmento norte: Y=-22 a Y=-25 -->
+    <model name="ctrl_wall_E_N">
+      <static>true</static><pose>4 -23.5 2 0 0 0</pose>
       <link name="link">
-        <collision name="col"><geometry><box><size>0.25 8 4</size></box></geometry></collision>
-        <visual name="vis"><geometry><box><size>0.25 8 4</size></box></geometry>
+        <collision name="col"><geometry><box><size>0.25 3 4</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 3 4</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Dintel puerta lateral este (Y=-26, z=3 a z=4) -->
+    <model name="ctrl_wall_E_lintel">
+      <static>true</static><pose>4 -26 3.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.25 2 1</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 2 1</size></box></geometry>
+          <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+    <!-- Segmento sur: Y=-27 a Y=-30 -->
+    <model name="ctrl_wall_E_S">
+      <static>true</static><pose>4 -28.5 2 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>0.25 3 4</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>0.25 3 4</size></box></geometry>
           <material><ambient>0.86 0.84 0.80 1</ambient><diffuse>0.90 0.88 0.84 1</diffuse></material>
         </visual>
       </link>
@@ -587,10 +678,10 @@
         <collision name="col">
           <geometry><box><size>4.0 0.4 0.15</size></box></geometry>
           <surface>
-            <friction><ode><mu>2.0</mu><mu2>1.5</mu2></ode></friction>
+            <friction><ode><mu>1.5</mu><mu2>1.5</mu2></ode></friction>
             <contact><ode>
-              <kp>1000000</kp><kd>100</kd>
-              <max_vel>0.5</max_vel><min_depth>0.001</min_depth>
+              <kp>500000</kp><kd>100</kd>
+              <max_vel>0.5</max_vel><min_depth>0.002</min_depth>
             </ode></contact>
           </surface>
         </collision>
@@ -614,10 +705,10 @@
         <collision name="col">
           <geometry><box><size>4.0 4.6 0.15</size></box></geometry>
           <surface>
-            <friction><ode><mu>2.0</mu><mu2>1.5</mu2></ode></friction>
+            <friction><ode><mu>1.5</mu><mu2>1.5</mu2></ode></friction>
             <contact><ode>
-              <kp>1000000</kp><kd>100</kd>
-              <max_vel>0.5</max_vel><min_depth>0.001</min_depth>
+              <kp>500000</kp><kd>100</kd>
+              <max_vel>0.5</max_vel><min_depth>0.002</min_depth>
             </ode></contact>
           </surface>
         </collision>
@@ -633,60 +724,32 @@
     </model>
 
     <!-- ══════════════════════════════════════════════
-         RELLENO DE UNIÓN ENTRE RAMPAS — elimina hueco en Y=+15
-         Cuña plana que sella la junta entre ramp_north y ramp_small_south
-         Y=+14.7 a Y=+15.3, z≈1.047 (altura media de ambas superficies)
-         Ancho 4.0 m (igual que rampa norte), grosor 0.15 m
+         RAMPA INTERIOR — transición suave al suelo del tubo
+         Y=+15.1 (z=1.094, al ras con ramp_north sur)
+            →   Y=+7   (z=1.000, suelo del tubo en x=0)
+         Longitud 8.1 m, pendiente 0.665° (roll=+0.01161 rad)
+         Reemplaza ramp_junction + ramp_small_south anteriores:
+         elimina escalón de 20 mm en Y=15.08 que bloqueaba al Husky.
+         La unión con ramp_north queda a z=1.094 sin discontinuidad.
+         Ancho 4 m, grosor 0.15 m, mu=1.5 (max agarre).
          ══════════════════════════════════════════════ -->
 
-    <model name="ramp_junction">
+    <model name="ramp_inner">
       <static>true</static>
-      <pose>0 15.0 1.047 -0.100 0 0</pose>
+      <pose>0 11.05 0.972 0.01161 0 0</pose>
       <link name="link">
         <collision name="col">
-          <geometry><box><size>4.0 0.6 0.15</size></box></geometry>
+          <geometry><box><size>4.0 8.1 0.15</size></box></geometry>
           <surface>
-            <friction><ode><mu>2.0</mu><mu2>1.5</mu2></ode></friction>
+            <friction><ode><mu>1.5</mu><mu2>1.5</mu2></ode></friction>
             <contact><ode>
-              <kp>1000000</kp><kd>100</kd>
-              <max_vel>0.5</max_vel><min_depth>0.001</min_depth>
+              <kp>500000</kp><kd>100</kd>
+              <max_vel>0.5</max_vel><min_depth>0.002</min_depth>
             </ode></contact>
           </surface>
         </collision>
         <visual name="vis">
-          <geometry><box><size>4.0 0.6 0.15</size></box></geometry>
-          <material>
-            <ambient>0.90 0.78 0.04 1</ambient>
-            <diffuse>1.0  0.88 0.05 1</diffuse>
-            <specular>0.25 0.25 0.25 1</specular>
-          </material>
-        </visual>
-      </link>
-    </model>
-
-    <!-- ══════════════════════════════════════════════
-         RAMPA PEQUEÑA SUR — descenso suave dentro del tubo
-         Y=+15.0 (z=1.047, unión con ramp_junction) → Y=+12 (z=1.0, suelo tubo)
-         Ancho 4m (igual que rampa norte), pendiente +0.016 rad (0.9°)
-         Desplazada al norte para empalmar sin hueco con ramp_junction
-         ══════════════════════════════════════════════ -->
-
-    <model name="ramp_small_south">
-      <static>true</static>
-      <pose>0 13.5 1.015 0.016 0 0</pose>
-      <link name="link">
-        <collision name="col">
-          <geometry><box><size>4.0 3.0 0.15</size></box></geometry>
-          <surface>
-            <friction><ode><mu>2.0</mu><mu2>1.5</mu2></ode></friction>
-            <contact><ode>
-              <kp>1000000</kp><kd>100</kd>
-              <max_vel>0.5</max_vel><min_depth>0.001</min_depth>
-            </ode></contact>
-          </surface>
-        </collision>
-        <visual name="vis">
-          <geometry><box><size>4.0 3.0 0.15</size></box></geometry>
+          <geometry><box><size>4.0 8.1 0.15</size></box></geometry>
           <material>
             <ambient>0.90 0.78 0.04 1</ambient>
             <diffuse>1.0  0.88 0.05 1</diffuse>
