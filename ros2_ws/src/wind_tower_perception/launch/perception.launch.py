@@ -28,6 +28,8 @@ and the synthetic SDF is being simulated)::
         ground_truth_path:=~/wind_tower_synthetic/defects_ground_truth.yaml
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -74,11 +76,13 @@ def generate_launch_description():
 
     declared = [
         DeclareLaunchArgument(
-            'backend', default_value='hough',
+            'backend', default_value='yolo',
             description="Detector backend: 'hough' or 'yolo'.",
         ),
         DeclareLaunchArgument(
-            'yolo_model_path', default_value='',
+            'yolo_model_path',
+            default_value=os.path.expanduser(
+                '~/ROS2_Wind_Tower_Inspection/ros2_ws/models/best.pt'),
             description='Path to a .pt YOLO checkpoint when backend=yolo.',
         ),
         DeclareLaunchArgument(

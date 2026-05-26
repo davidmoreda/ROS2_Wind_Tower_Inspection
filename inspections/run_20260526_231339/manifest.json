@@ -1,0 +1,12 @@
+{
+  "run_id": "run_20260526_231339",
+  "run_dir": "/home/javie/ROS2_Wind_Tower_Inspection/inspections/run_20260526_231339",
+  "frames_dir": "frames",
+  "detections_log": "detections.ndjson",
+  "started_at_iso": "2026-05-26T21:13:39.424309Z",
+  "updated_at_iso": "2026-05-26T21:30:01.142370Z",
+  "total_frames_saved": 362,
+  "last_frame_index": 362,
+  "last_reason": "detection",
+  "last_n_detections": 3
+}

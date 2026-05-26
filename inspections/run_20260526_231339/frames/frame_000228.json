@@ -1,0 +1,69 @@
+{
+  "run_id": "run_20260526_231339",
+  "frame_index": 228,
+  "image_path": "frames/frame_000228.jpg",
+  "capture_reason": "detection",
+  "wall_clock_iso": "2026-05-26T21:28:22.709088Z",
+  "ros_stamp_s": 537.051,
+  "node_stamp_s": 1779830902.709132,
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "frame_id": "robot/robot/arm_0_wrist_3_link/inspection_camera"
+  },
+  "mission_state": "IDLE",
+  "cylindrical_pose": {
+    "x_m": 1.9355980353410758,
+    "theta_tube_deg": 0.00042119879389663654,
+    "theta_surface_deg": 0.00042119879389663654,
+    "yaw_deg": -73.85836211692796,
+    "in_tube_limits": true
+  },
+  "detections": [
+    {
+      "class_id": "through_hole",
+      "score": 0.9318896532058716,
+      "cx_px": 1093.83349609375,
+      "cy_px": 204.15478515625,
+      "w_px": 47.779052734375,
+      "h_px": 45.6583251953125,
+      "radius_px": 16.521804796682883
+    },
+    {
+      "class_id": "through_hole",
+      "score": 0.9299972653388977,
+      "cx_px": 959.230224609375,
+      "cy_px": 217.83554077148438,
+      "w_px": 45.5107421875,
+      "h_px": 44.53314208984375,
+      "radius_px": 15.91859839710163
+    },
+    {
+      "class_id": "pitting",
+      "score": 0.7445785403251648,
+      "cx_px": 419.07623291015625,
+      "cy_px": 650.8856811523438,
+      "w_px": 11.7449951171875,
+      "h_px": 11.583740234375,
+      "radius_px": 4.124075260893619
+    },
+    {
+      "class_id": "through_hole",
+      "score": 0.6636773347854614,
+      "cx_px": 119.15521240234375,
+      "cy_px": 105.01713562011719,
+      "w_px": 53.544708251953125,
+      "h_px": 50.430999755859375,
+      "radius_px": 18.3887219481165
+    },
+    {
+      "class_id": "rust",
+      "score": 0.4828842282295227,
+      "cx_px": 118.87010955810547,
+      "cy_px": 104.99896240234375,
+      "w_px": 52.74476623535156,
+      "h_px": 50.296356201171875,
+      "radius_px": 18.220410623009162
+    }
+  ]
+}

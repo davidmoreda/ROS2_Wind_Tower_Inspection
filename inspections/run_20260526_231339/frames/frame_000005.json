@@ -1,0 +1,33 @@
+{
+  "run_id": "run_20260526_231339",
+  "frame_index": 5,
+  "image_path": "frames/frame_000005.jpg",
+  "capture_reason": "detection",
+  "wall_clock_iso": "2026-05-26T21:15:12.202100Z",
+  "ros_stamp_s": 205.95,
+  "node_stamp_s": 1779830112.2021284,
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "frame_id": "robot/robot/arm_0_wrist_3_link/inspection_camera"
+  },
+  "mission_state": "IDLE",
+  "cylindrical_pose": {
+    "x_m": 1.659740497274487,
+    "theta_tube_deg": 0.000421152369401935,
+    "theta_surface_deg": 0.000421152369401935,
+    "yaw_deg": -4.3442532784746435,
+    "in_tube_limits": true
+  },
+  "detections": [
+    {
+      "class_id": "pitting",
+      "score": 0.621738076210022,
+      "cx_px": 897.5213623046875,
+      "cy_px": 131.92034912109375,
+      "w_px": 23.590576171875,
+      "h_px": 22.1363525390625,
+      "radius_px": 8.087542070426494
+    }
+  ]
+}

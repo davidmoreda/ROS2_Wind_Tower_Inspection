@@ -6,7 +6,7 @@ defect_detector:
 
     yolo:
       model_path: ~/ROS2_Wind_Tower_Inspection/ros2_ws/models/best.pt
-      conf_threshold: 0.25
+      conf_threshold: 0.75
       iou_threshold: 0.45
       imgsz: 640
       device: cpu            # set '0' for the first GPU
@@ -31,7 +31,7 @@ image_capture:
     output_root: ~/ROS2_Wind_Tower_Inspection/inspections
 
     save_on_detection: true
-    save_heartbeat: true
+    save_heartbeat: false
     heartbeat_period_s: 5.0
     min_capture_period_s: 0.5
     jpeg_quality: 90

@@ -1,0 +1,51 @@
+{
+  "run_id": "run_20260526_231339",
+  "frame_index": 326,
+  "image_path": "frames/frame_000326.jpg",
+  "capture_reason": "detection",
+  "wall_clock_iso": "2026-05-26T21:29:34.796411Z",
+  "ros_stamp_s": 559.302,
+  "node_stamp_s": 1779830974.7964401,
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "frame_id": "robot/robot/arm_0_wrist_3_link/inspection_camera"
+  },
+  "mission_state": "IDLE",
+  "cylindrical_pose": {
+    "x_m": 1.8852449396415398,
+    "theta_tube_deg": 0.00042120189742866925,
+    "theta_surface_deg": 0.00042120189742866925,
+    "yaw_deg": -70.6052452173152,
+    "in_tube_limits": true
+  },
+  "detections": [
+    {
+      "class_id": "rust",
+      "score": 0.9030337333679199,
+      "cx_px": 98.1219711303711,
+      "cy_px": 401.2178955078125,
+      "w_px": 61.59590148925781,
+      "h_px": 55.765380859375,
+      "radius_px": 20.772326516704712
+    },
+    {
+      "class_id": "through_hole",
+      "score": 0.8907256126403809,
+      "cx_px": 375.82659912109375,
+      "cy_px": 439.93438720703125,
+      "w_px": 34.5445556640625,
+      "h_px": 33.184326171875,
+      "radius_px": 11.975302265258538
+    },
+    {
+      "class_id": "pitting",
+      "score": 0.693117082118988,
+      "cx_px": 427.7279052734375,
+      "cy_px": 290.8470458984375,
+      "w_px": 12.064697265625,
+      "h_px": 11.8341064453125,
+      "radius_px": 4.22494819102973
+    }
+  ]
+}
