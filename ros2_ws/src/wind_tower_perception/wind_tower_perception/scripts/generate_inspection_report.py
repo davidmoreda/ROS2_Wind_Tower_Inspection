@@ -227,7 +227,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', required=True,
                         help='Path to a mission run directory '
-                             '(e.g. ~/wind_tower_inspections/run_YYYYMMDD_HHMMSS).')
+                             '(e.g. ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS).')
     parser.add_argument('--output-dir', default=None,
                         help='Where to write the report. Defaults to '
                              '<run-dir>/report/.')

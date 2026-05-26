@@ -150,6 +150,7 @@ class DetectorNode(Node):
     def _try_load_yolo(self) -> bool:
         if not self._yolo_model_path:
             return False
+        self._yolo_model_path = os.path.expanduser(self._yolo_model_path)
         if not os.path.isfile(self._yolo_model_path):
             return False
         try:

@@ -101,7 +101,7 @@ class ImageCaptureNode(Node):
         self.declare_parameter(
             'mission_state_topic', '/inspection/state_text')
 
-        self.declare_parameter('output_root', '~/wind_tower_inspections')
+        self.declare_parameter('output_root', '~/ROS2_Wind_Tower_Inspection/inspections')
 
         self.declare_parameter('save_on_detection', True)
         self.declare_parameter('save_heartbeat', True)

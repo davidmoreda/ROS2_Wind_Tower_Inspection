@@ -2,7 +2,7 @@
 
 Guía de arranque rápido con el modelo `best.pt` ya entrenado.
 
-**Modelo:** `~/wind_tower_runs/wind_tower_defects/weights/best.pt`
+**Modelo:** `~/ROS2_Wind_Tower_Inspection/ros2_ws/models/best.pt`
 
 ---
 
@@ -27,9 +27,7 @@ Esperar: `platform_velocity_controller: Configured and activated`
 
 **T2 — Percepción con YOLO:**
 ```bash
-ros2 launch wind_tower_perception perception.launch.py \
-    backend:=yolo \
-    yolo_model_path:=$HOME/wind_tower_runs/wind_tower_defects/weights/best.pt
+ros2 launch wind_tower_perception perception.launch.py
 ```
 Esperar: `Defect detector ready (backend=yolo ...)`
 
@@ -66,7 +64,7 @@ ros2 topic echo /inspection/defects/cumulative
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
 python3 -m wind_tower_perception.scripts.generate_inspection_report \
-    --run-dir ~/wind_tower_inspections/run_YYYYMMDD_HHMMSS \
+    --run-dir ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS \
     --model claude-opus-4-7 \
     --attach-thumbnails 5
 ```
