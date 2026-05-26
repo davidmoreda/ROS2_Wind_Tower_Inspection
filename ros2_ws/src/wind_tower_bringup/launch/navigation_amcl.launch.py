@@ -1,0 +1,282 @@
+"""
+Navegación autónoma con mapa ya guardado (AMCL localization).
+
+Este launch se usa DESPUÉS de haber guardado el mapa con SLAM.
+Reemplaza slam_toolbox por map_server + AMCL para localización.
+
+Uso:
+  # Terminal 1 — simulación
+  ros2 launch wind_tower_bringup simulation.launch.py
+
+  # Terminal 2 — navegación con mapa
+  ros2 launch wind_tower_bringup navigation_amcl.launch.py map:=$HOME/maps/wind_tower.yaml
+
+  # Opcional — sin RViz:
+  ros2 launch wind_tower_bringup navigation_amcl.launch.py map:=$HOME/maps/wind_tower.yaml rviz:=false
+
+  # Ir a estación de carga:
+  ros2 run wind_tower_bringup mission_navigator --ros-args -p target:=charging_station
+
+  # Ir a zona de mantenimiento:
+  ros2 run wind_tower_bringup mission_navigator --ros-args -p target:=maintenance_station
+
+Arquitectura TF:
+  map → odom        (publicado por EKF2, fusionando /amcl_pose + odometría)
+  odom → base_link  (publicado por Clearpath EKF1)
+
+  AMCL tiene tf_broadcast:false → solo publica /amcl_pose
+  EKF2 (ekf_map_node) fusiona /amcl_pose + /robot/platform/odom/filtered → map→odom
+
+IMPORTANTE — Pose inicial:
+  Al arrancar, el robot puede estar desorientado en el mapa.
+  Usa RViz → "2D Pose Estimate" para darle la posición real al inicio.
+  AMCL convergerá en 2-3 movimientos.
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    TimerAction,
+)
+from launch.conditions import IfCondition
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg_bringup = get_package_share_directory('wind_tower_bringup')
+
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    use_rviz     = LaunchConfiguration('rviz')
+    map_yaml     = LaunchConfiguration('map')
+
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='Usar reloj de simulación',
+    )
+    declare_rviz = DeclareLaunchArgument(
+        'rviz',
+        default_value='true',
+        description='Lanzar RViz',
+    )
+    declare_map = DeclareLaunchArgument(
+        'map',
+        default_value=os.path.join(os.path.expanduser('~'), 'maps', 'wind_tower.yaml'),
+        description='Ruta al fichero .yaml del mapa guardado',
+    )
+
+    nav2_params  = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
+    amcl_params  = os.path.join(pkg_bringup, 'config', 'amcl_params.yaml')
+    ekf_map_cfg  = os.path.join(pkg_bringup, 'config', 'ekf_map.yaml')
+    nav2_rviz    = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
+
+    remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+
+    # ── Mando PS5 ─────────────────────────────────────────────────────────────
+    dualsense_joy = Node(
+        package='wind_tower_bringup',
+        executable='dualsense_joy',
+        name='dualsense_joy',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+    ps5_teleop = Node(
+        package='wind_tower_bringup',
+        executable='ps5_teleop',
+        name='ps5_teleop',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    # ── Percepción: pointcloud → laserscan → bridge QoS ───────────────────────
+    # Delay 15s para que el reloj de Gazebo se estabilice
+    perception = TimerAction(
+        period=15.0,
+        actions=[
+            Node(
+                package='pointcloud_to_laserscan',
+                executable='pointcloud_to_laserscan_node',
+                name='pointcloud_to_laserscan_node',
+                output='screen',
+                parameters=[
+                    os.path.join(pkg_bringup, 'config', 'pointcloud_to_laserscan.yaml'),
+                    {'use_sim_time': use_sim_time},
+                ],
+                remappings=[
+                    ('cloud_in', '/velodyne_points'),
+                    ('scan',     '/scan_raw'),
+                ],
+            ),
+            Node(
+                package='wind_tower_bringup',
+                executable='scan_qos_bridge',
+                name='scan_qos_bridge',
+                output='screen',
+                parameters=[{'use_sim_time': use_sim_time}],
+            ),
+        ],
+    )
+
+    # ── map_server + AMCL + EKF2 ──────────────────────────────────────────────
+    # Delay 17s (2s tras percepción para que /scan esté disponible)
+    localization = TimerAction(
+        period=17.0,
+        actions=[
+            # Sirve el mapa guardado
+            Node(
+                package='nav2_map_server',
+                executable='map_server',
+                name='map_server',
+                output='screen',
+                parameters=[
+                    {'use_sim_time': use_sim_time},
+                    {'yaml_filename': map_yaml},
+                ],
+                remappings=remappings_tf,
+            ),
+            # AMCL localiza el robot en el mapa (tf_broadcast:false → publica /amcl_pose)
+            Node(
+                package='nav2_amcl',
+                executable='amcl',
+                name='amcl',
+                output='screen',
+                parameters=[amcl_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            # EKF2 fusiona /amcl_pose + odometría → publica map→odom TF
+            Node(
+                package='robot_localization',
+                executable='ekf_node',
+                name='ekf_map_node',
+                output='screen',
+                parameters=[ekf_map_cfg, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf + [
+                    ('odometry/filtered', '/odometry/global'),
+                ],
+            ),
+            # Lifecycle manager para map_server y amcl
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_localization',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'autostart': True,
+                    'node_names': ['map_server', 'amcl'],
+                }],
+            ),
+        ],
+    )
+
+    # ── Nav2 navigation (mismos nodos que en navigation.launch.py) ────────────
+    # Delay 22s: 5s adicionales para que AMCL converja antes de planificar
+    navigation = TimerAction(
+        period=22.0,
+        actions=[
+            Node(
+                package='nav2_controller',
+                executable='controller_server',
+                name='controller_server',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            Node(
+                package='nav2_smoother',
+                executable='smoother_server',
+                name='smoother_server',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            Node(
+                package='nav2_planner',
+                executable='planner_server',
+                name='planner_server',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            Node(
+                package='nav2_behaviors',
+                executable='behavior_server',
+                name='behavior_server',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf + [('cmd_vel', '/robot/cmd_vel')],
+            ),
+            Node(
+                package='nav2_bt_navigator',
+                executable='bt_navigator',
+                name='bt_navigator',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            Node(
+                package='nav2_waypoint_follower',
+                executable='waypoint_follower',
+                name='waypoint_follower',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf,
+            ),
+            Node(
+                package='nav2_velocity_smoother',
+                executable='velocity_smoother',
+                name='velocity_smoother',
+                output='screen',
+                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                remappings=remappings_tf + [('cmd_vel_smoothed', '/robot/cmd_vel')],
+            ),
+            Node(
+                package='nav2_lifecycle_manager',
+                executable='lifecycle_manager',
+                name='lifecycle_manager_navigation',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'autostart': True,
+                    'node_names': [
+                        'controller_server',
+                        'smoother_server',
+                        'planner_server',
+                        'behavior_server',
+                        'velocity_smoother',
+                        'bt_navigator',
+                        'waypoint_follower',
+                    ],
+                }],
+            ),
+        ],
+    )
+
+    # ── RViz ──────────────────────────────────────────────────────────────────
+    rviz = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', nav2_rviz],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen',
+        condition=IfCondition(use_rviz),
+    )
+
+    return LaunchDescription([
+        declare_use_sim_time,
+        declare_rviz,
+        declare_map,
+        dualsense_joy,
+        ps5_teleop,
+        perception,
+        localization,
+        navigation,
+        rviz,
+    ])

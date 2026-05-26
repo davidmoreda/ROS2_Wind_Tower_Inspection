@@ -14,6 +14,7 @@ setup(
             'launch/simulation.launch.py',
             'launch/slam.launch.py',
             'launch/navigation.launch.py',
+            'launch/navigation_amcl.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/robot.yaml',
@@ -21,6 +22,8 @@ setup(
             'config/slam_params.yaml',
             'config/ekf_map.yaml',
             'config/nav2_params.yaml',
+            'config/amcl_params.yaml',
+            'config/waypoints.yaml',
             'config/slam.rviz',
             'config/navigation.rviz',
         ]),
@@ -43,6 +46,7 @@ setup(
             'tf_static_relay = wind_tower_bringup.tf_static_relay:main',
             'turner_node = wind_tower_bringup.turner_node:main',
             'scan_qos_bridge = wind_tower_bringup.scan_qos_bridge:main',
+            'mission_navigator = wind_tower_bringup.mission_navigator:main',
         ],
     },
 )
