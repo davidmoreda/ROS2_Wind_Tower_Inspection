@@ -61,15 +61,33 @@ ros2 topic echo /inspection/defects/cumulative
 
 ## Informe post-misión
 
+Genera con Gemini un informe en español a partir de un `run_*/` de inspección.
+
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export GEMINI_API_KEY="..."
 python3 -m wind_tower_perception.scripts.generate_inspection_report \
     --run-dir ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS \
-    --model claude-opus-4-7 \
     --attach-thumbnails 5
 ```
 
-`--dry-run` genera el JSON sin llamar a la API.
+Genera en `<run-dir>/report/`:
+
+| Archivo | Contenido |
+|---|---|
+| `inspection_summary.md` | Resumen Markdown con tabla de defectos enviado al modelo |
+| `defect_map.png` | Mapa visual con la distribución de defectos sobre el cilindro desplegado |
+| `inspection_report.md` | Informe redactado por Gemini |
+
+Opciones útiles:
+
+- `--dry-run` → genera el resumen y el mapa **sin** llamar a la API (útil para iterar tolerancias de clustering sin gastar tokens).
+- `--model gemini-2.5-pro` → modelo más potente cuando interese.
+- `--cluster-x-tol-m 0.30 --cluster-theta-tol-deg 5.0` → tolerancias del clustering de defectos.
+
+Dependencias (una sola vez):
+```bash
+pip install google-genai matplotlib --break-system-packages
+```
 
 ---
 

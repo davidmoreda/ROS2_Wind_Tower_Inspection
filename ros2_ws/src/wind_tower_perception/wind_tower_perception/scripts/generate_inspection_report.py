@@ -1,38 +1,34 @@
-"""Aggregate a mission's detections and ask Claude to draft the inspection report.
+"""Genera un informe de inspección de torre eólica con Gemini.
 
 Inputs
 ------
-A run directory created by ``image_capture_node`` containing:
+Un directorio de misión creado por ``image_capture_node`` con:
 
 * ``manifest.json``
-* ``detections.ndjson`` — one detection per line, with cylindrical pose
+* ``detections.ndjson`` — una detección por línea con pose cilíndrica
 * ``frames/frame_NNNNNN.jpg`` + ``frames/frame_NNNNNN.json``
 
-What this script does
----------------------
-1. Loads ``detections.ndjson`` and clusters detections that are close in
-   (x_axial, theta_surface) into unique defects (the same logic used by
-   ``defect_mapper_node``, kept here so the script can run fully offline).
-2. Builds a compact JSON summary of the run (counts per class, per-defect
-   pose, observations, max confidence, representative frame).
-3. Calls the Claude API with that summary and a structured prompt to draft a
-   Markdown inspection report. Optionally attaches representative defect
-   thumbnails so the model can describe them in plain language.
-4. Writes:
-   - ``report/inspection_report.md``
-   - ``report/inspection_summary.json``
+Qué hace
+--------
+1. Carga las detecciones y las agrupa por proximidad en (x_axial, theta_surface)
+   en defectos únicos.
+2. Genera un **resumen Markdown** con cabecera, conteos por clase y tabla de
+   defectos → ``report/inspection_summary.md``.
+3. Genera un **mapa visual** con matplotlib de los defectos sobre el cilindro
+   desplegado → ``report/defect_map.png``.
+4. Llama a Gemini con (a) el resumen Markdown, (b) el mapa, (c) las imágenes
+   representativas de los defectos más confiables, y le pide un informe en
+   español → ``report/inspection_report.md``.
 
-Authentication
---------------
-The script expects the environment variable ``ANTHROPIC_API_KEY``. The model
-defaults to ``claude-opus-4-7`` and can be overridden with ``--model``.
+Autenticación
+-------------
+Variable de entorno ``GEMINI_API_KEY``. Modelo por defecto:
+``gemini-2.5-flash`` (override con ``--model``).
 
-Run with ``--dry-run`` to skip the API call and only emit the JSON summary;
-useful in CI or when you do not have an API key handy.
+Con ``--dry-run`` solo se generan el summary y el mapa, sin llamar a la API.
 """
 
 import argparse
-import base64
 import json
 import math
 import os
@@ -41,8 +37,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 
-DEFAULT_MODEL = 'claude-opus-4-7'
-DEFAULT_MAX_TOKENS = 4096
+DEFAULT_MODEL = 'gemini-2.5-flash'
+
+CLASS_COLORS = {
+    'rust': '#D2691E',          # naranja óxido
+    'pitting': '#606060',       # gris oscuro
+    'through_hole': '#000000',  # negro
+}
+DEFAULT_COLOR = '#808080'
 
 
 @dataclass
@@ -74,9 +76,6 @@ def _cluster_detections(records, x_tol_m=0.30, theta_tol_deg=5.0) -> List[Cluste
         class_id = str(det.get('class_id', 'unknown'))
         score = float(det.get('score', 0.0))
         x_axial = float(cyl.get('x_m', 0.0))
-        # The capture-time pose is the ROBOT's pose at the bottom; the projection
-        # to the wall happens in defect_mapper_node. For the offline report we
-        # use whatever is recorded as the most informative coordinate available.
         theta_surface = float(cyl.get('theta_surface_deg', 0.0))
         image_path = rec.get('image_path')
 
@@ -119,142 +118,156 @@ def _cluster_detections(records, x_tol_m=0.30, theta_tol_deg=5.0) -> List[Cluste
     return clusters
 
 
-def _build_summary(manifest: dict, clusters: List[Cluster]) -> dict:
+def _build_text_summary(manifest: dict, clusters: List[Cluster]) -> str:
+    """Resumen Markdown que se envía a Gemini."""
     per_class: Dict[str, int] = {}
     for c in clusters:
         per_class[c.class_id] = per_class.get(c.class_id, 0) + 1
-    clusters_payload = []
-    for c in clusters:
-        clusters_payload.append({
-            'id': c.cluster_id,
-            'class_id': c.class_id,
-            'x_axial_m': round(c.x_axial_m, 3),
-            'theta_surface_deg': round(c.theta_surface_deg, 2),
-            'observations': c.observations,
-            'max_score': round(c.max_score, 3),
-            'representative_frame': c.representative_frame,
-        })
-    return {
-        'run_id': manifest.get('run_id'),
-        'run_dir': manifest.get('run_dir'),
-        'started_at_iso': manifest.get('started_at_iso'),
-        'updated_at_iso': manifest.get('updated_at_iso'),
-        'total_frames_saved': manifest.get('total_frames_saved', 0),
-        'total_unique_defects': len(clusters),
-        'defects_per_class': per_class,
-        'defects': clusters_payload,
-    }
+
+    lines = []
+    lines.append('# Resumen de misión de inspección')
+    lines.append('')
+    lines.append(f'- **Run ID**: {manifest.get("run_id", "desconocido")}')
+    lines.append(f'- **Inicio**: {manifest.get("started_at_iso", "?")}')
+    lines.append(f'- **Última actualización**: {manifest.get("updated_at_iso", "?")}')
+    lines.append(f'- **Frames guardados**: {manifest.get("total_frames_saved", 0)}')
+    lines.append(f'- **Defectos únicos detectados**: {len(clusters)}')
+    lines.append('')
+
+    if per_class:
+        lines.append('## Conteo por clase')
+        lines.append('')
+        for cls, count in sorted(per_class.items()):
+            lines.append(f'- **{cls}**: {count}')
+        lines.append('')
+
+    if clusters:
+        lines.append('## Tabla de defectos')
+        lines.append('')
+        lines.append('| ID | Clase | x_axial (m) | θ_surface (°) | Observ. | Score máx | Frame representativo |')
+        lines.append('|---|---|---|---|---|---|---|')
+        for c in sorted(clusters, key=lambda c: c.cluster_id):
+            frame = c.representative_frame or '-'
+            lines.append(
+                f'| {c.cluster_id} | {c.class_id} | '
+                f'{c.x_axial_m:.3f} | {c.theta_surface_deg:.2f} | '
+                f'{c.observations} | {c.max_score:.3f} | `{frame}` |'
+            )
+        lines.append('')
+    else:
+        lines.append('## Tabla de defectos')
+        lines.append('')
+        lines.append('No se detectaron defectos durante la misión.')
+        lines.append('')
+
+    return '\n'.join(lines)
 
 
-def _load_image_b64(path: str) -> Optional[str]:
-    if not path or not os.path.isfile(path):
-        return None
-    try:
-        with open(path, 'rb') as fh:
-            data = fh.read()
-        return base64.standard_b64encode(data).decode('ascii')
-    except OSError:
-        return None
+def _build_defect_map(clusters: List[Cluster], output_path: str) -> None:
+    """Mapa scatter 2D del cilindro desplegado."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    if not clusters:
+        ax.text(0.5, 0.5, 'Sin defectos detectados',
+                ha='center', va='center', transform=ax.transAxes, fontsize=14)
+    else:
+        by_class: Dict[str, List[Cluster]] = {}
+        for c in clusters:
+            by_class.setdefault(c.class_id, []).append(c)
+
+        for class_id, group in sorted(by_class.items()):
+            xs = [c.x_axial_m for c in group]
+            ys = [c.theta_surface_deg for c in group]
+            sizes = [60 + c.observations * 25 for c in group]
+            color = CLASS_COLORS.get(class_id, DEFAULT_COLOR)
+            ax.scatter(xs, ys, c=color, s=sizes, alpha=0.75,
+                       edgecolors='black', linewidths=0.6,
+                       label=f'{class_id} ({len(group)})')
+
+            for c in group:
+                ax.annotate(str(c.cluster_id),
+                            (c.x_axial_m, c.theta_surface_deg),
+                            textcoords='offset points', xytext=(8, 4),
+                            fontsize=8, color='black')
+
+        ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+
+    ax.set_xlabel('x_axial (m) — posición longitudinal en la torre', fontsize=11)
+    ax.set_ylabel('θ_surface (°) — ángulo alrededor del cilindro', fontsize=11)
+    ax.set_title('Mapa de defectos — cilindro desplegado', fontsize=13)
+    ax.set_ylim(-5, 365)
+    ax.set_yticks([0, 90, 180, 270, 360])
+    ax.grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=120, bbox_inches='tight')
+    plt.close(fig)
 
 
-def _build_messages(
-    summary: dict,
-    run_dir: str,
-    *,
-    attach_thumbnails: int,
-):
-    content = [
-        {
-            'type': 'text',
-            'text': (
-                'You are drafting an inspection report for a wind-tower internal '
-                'inspection mission. The robot scanned the inside of a tube and '
-                'detected circular defects (rust, pitting, through-holes). '
-                'Below is a JSON summary of the mission and (optionally) sample '
-                'detection thumbnails. Produce a Markdown report with:\n\n'
-                '1. Executive summary (1 paragraph).\n'
-                '2. Per-class counts and severity assessment.\n'
-                '3. Table of all defects with columns: id, class, x_axial (m), '
-                'theta_surface (deg), observations, max_score.\n'
-                '4. Notable findings — pick 3-5 defects that look the most '
-                'concerning based on confidence and class, describe them '
-                'briefly, and reference their representative frame path.\n'
-                '5. Recommendations for follow-up (manual review, NDT, etc).\n\n'
-                'Be concise and engineer-readable. Do not invent measurements '
-                'that are not in the JSON. If a field is missing, say so.'
-            ),
-        },
-        {
-            'type': 'text',
-            'text': '## Mission summary (JSON)\n```json\n' + json.dumps(
-                summary, indent=2) + '\n```',
-        },
-    ]
-
-    attached = 0
-    for cluster in summary['defects']:
-        if attached >= attach_thumbnails:
-            break
-        rel = cluster.get('representative_frame')
-        if not rel:
-            continue
-        abs_path = os.path.join(run_dir, rel)
-        b64 = _load_image_b64(abs_path)
-        if not b64:
-            continue
-        content.append({
-            'type': 'image',
-            'source': {
-                'type': 'base64',
-                'media_type': 'image/jpeg',
-                'data': b64,
-            },
-        })
-        content.append({
-            'type': 'text',
-            'text': (
-                f'^ Defect id {cluster["id"]} ({cluster["class_id"]}) at '
-                f'x_axial={cluster["x_axial_m"]} m, '
-                f'theta_surface={cluster["theta_surface_deg"]} deg.'
-            ),
-        })
-        attached += 1
-
-    return [{'role': 'user', 'content': content}]
+def _build_prompt() -> str:
+    return (
+        'Eres un ingeniero redactando un informe de inspección interna de una '
+        'torre eólica. Un robot inspeccionó el interior del tubo de la torre y '
+        'detectó defectos circulares: óxido (rust), picaduras (pitting) y '
+        'agujeros pasantes (through_hole).\n\n'
+        'A continuación recibes:\n'
+        '1. Un resumen Markdown de la misión con métricas y la tabla de defectos.\n'
+        '2. Una imagen del mapa visual con la distribución de los defectos '
+        'sobre el cilindro desplegado (eje X = posición longitudinal, '
+        'eje Y = ángulo en la superficie 0-360°).\n'
+        '3. Imágenes representativas de los defectos más confiables.\n\n'
+        'Redacta un **informe en español** en formato Markdown con esta '
+        'estructura exacta:\n\n'
+        '## 1. Resumen ejecutivo\n'
+        'Un párrafo con el resultado global de la inspección.\n\n'
+        '## 2. Severidad por clase\n'
+        'Análisis del riesgo asociado a cada tipo de defecto encontrado.\n\n'
+        '## 3. Tabla de defectos\n'
+        'Reproduce íntegramente la tabla del resumen.\n\n'
+        '## 4. Análisis del mapa de defectos\n'
+        'Describe qué se observa en el mapa visual: zonas con concentración, '
+        'distribución a lo largo del eje axial, agrupaciones angulares, etc.\n\n'
+        '## 5. Hallazgos destacados\n'
+        'Selecciona 3-5 defectos críticos (por confianza y clase) y descríbelos '
+        'brevemente, indicando posición y referencia al frame representativo.\n\n'
+        '## 6. Recomendaciones\n'
+        'Acciones de seguimiento sugeridas: revisión manual, ensayos no '
+        'destructivos, reparación, monitorización continua, etc.\n\n'
+        'Sé conciso, técnico y orientado a un ingeniero de mantenimiento. No '
+        'inventes mediciones que no estén en los datos proporcionados.'
+    )
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-dir', required=True,
-                        help='Path to a mission run directory '
-                             '(e.g. ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS).')
+                        help='Directorio de misión '
+                             '(p.ej. ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS).')
     parser.add_argument('--output-dir', default=None,
-                        help='Where to write the report. Defaults to '
-                             '<run-dir>/report/.')
-    parser.add_argument('--model', default=DEFAULT_MODEL)
-    parser.add_argument('--max-tokens', type=int, default=DEFAULT_MAX_TOKENS)
+                        help='Dónde escribir el informe. Por defecto <run-dir>/report/.')
+    parser.add_argument('--model', default=DEFAULT_MODEL,
+                        help=f'Modelo Gemini (default: {DEFAULT_MODEL}).')
     parser.add_argument('--cluster-x-tol-m', type=float, default=0.30)
     parser.add_argument('--cluster-theta-tol-deg', type=float, default=5.0)
     parser.add_argument('--attach-thumbnails', type=int, default=5,
-                        help='Number of representative defect frames to send '
-                             'as images alongside the JSON summary.')
+                        help='Nº de imágenes representativas a adjuntar al prompt.')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Skip the API call; only emit inspection_summary.json.')
+                        help='No llamar a Gemini; solo generar summary y mapa.')
     args = parser.parse_args(argv)
 
     run_dir = os.path.expanduser(args.run_dir)
     manifest_path = os.path.join(run_dir, 'manifest.json')
     detections_path = os.path.join(run_dir, 'detections.ndjson')
     if not os.path.isfile(manifest_path):
-        print(f'[generate_inspection_report] missing manifest: {manifest_path}',
-              file=sys.stderr)
+        print(f'[report] no encuentro el manifest: {manifest_path}', file=sys.stderr)
         sys.exit(1)
     if not os.path.isfile(detections_path):
-        print(
-            f'[generate_inspection_report] missing detections log: '
-            f'{detections_path}',
-            file=sys.stderr,
-        )
+        print(f'[report] no encuentro detections.ndjson: {detections_path}',
+              file=sys.stderr)
         sys.exit(1)
 
     with open(manifest_path, 'r', encoding='utf-8') as fh:
@@ -275,57 +288,82 @@ def main(argv=None):
         x_tol_m=args.cluster_x_tol_m,
         theta_tol_deg=args.cluster_theta_tol_deg,
     )
-    summary = _build_summary(manifest, clusters)
 
     output_dir = args.output_dir or os.path.join(run_dir, 'report')
     output_dir = os.path.expanduser(output_dir)
     os.makedirs(output_dir, exist_ok=True)
-    summary_path = os.path.join(output_dir, 'inspection_summary.json')
-    report_path = os.path.join(output_dir, 'inspection_report.md')
+
+    summary_text = _build_text_summary(manifest, clusters)
+    summary_path = os.path.join(output_dir, 'inspection_summary.md')
     with open(summary_path, 'w', encoding='utf-8') as fh:
-        json.dump(summary, fh, indent=2)
-    print(f'[generate_inspection_report] summary: {summary_path}')
+        fh.write(summary_text)
+    print(f'[report] resumen: {summary_path}')
+
+    map_path = os.path.join(output_dir, 'defect_map.png')
+    _build_defect_map(clusters, map_path)
+    print(f'[report] mapa:    {map_path}')
 
     if args.dry_run:
-        print('[generate_inspection_report] --dry-run set; skipping API call.')
+        print('[report] --dry-run activo; no llamo a la API.')
         return
 
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    api_key = os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        print(
-            '[generate_inspection_report] ANTHROPIC_API_KEY not set. Skipping '
-            'the LLM call. The JSON summary has been written; rerun without '
-            '--dry-run once the key is configured.',
-            file=sys.stderr,
-        )
+        print('[report] GEMINI_API_KEY no configurada. Resumen y mapa generados; '
+              'relanza sin --dry-run cuando tengas la key.', file=sys.stderr)
         sys.exit(2)
 
     try:
-        import anthropic
+        from google import genai
+        from google.genai import types
     except ImportError:
-        print(
-            '[generate_inspection_report] the `anthropic` Python SDK is not '
-            'installed. Install with `pip install anthropic`.',
-            file=sys.stderr,
-        )
+        print('[report] SDK `google-genai` no instalado. Instala con:\n'
+              '    pip install google-genai --break-system-packages',
+              file=sys.stderr)
         sys.exit(1)
 
-    client = anthropic.Anthropic(api_key=api_key)
-    messages = _build_messages(
-        summary, run_dir, attach_thumbnails=args.attach_thumbnails)
-    response = client.messages.create(
-        model=args.model,
-        max_tokens=args.max_tokens,
-        messages=messages,
-    )
-    text_parts = [
-        block.text for block in response.content
-        if getattr(block, 'type', None) == 'text'
+    content_parts: list = [
+        _build_prompt(),
+        '\n\n--- DATOS DE LA MISIÓN ---\n\n' + summary_text,
+        '\n\n--- MAPA VISUAL DE DEFECTOS ---\n',
     ]
-    report_text = '\n'.join(text_parts).strip() or '(empty response)'
+    with open(map_path, 'rb') as fh:
+        map_bytes = fh.read()
+    content_parts.append(types.Part.from_bytes(data=map_bytes, mime_type='image/png'))
+
+    attached = 0
+    ordered = sorted(clusters, key=lambda c: -c.max_score)
+    for cluster in ordered:
+        if attached >= args.attach_thumbnails:
+            break
+        if not cluster.representative_frame:
+            continue
+        abs_path = os.path.join(run_dir, cluster.representative_frame)
+        if not os.path.isfile(abs_path):
+            continue
+        with open(abs_path, 'rb') as fh:
+            img_bytes = fh.read()
+        content_parts.append(
+            f'\n\n### Defecto {cluster.cluster_id} ({cluster.class_id}) '
+            f'en x_axial={cluster.x_axial_m:.2f} m, '
+            f'θ_surface={cluster.theta_surface_deg:.1f}°\n'
+        )
+        content_parts.append(
+            types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'))
+        attached += 1
+
+    print(f'[report] llamando a Gemini ({args.model}) con {attached} thumbnails…')
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=args.model,
+        contents=content_parts,
+    )
+
+    report_text = (response.text or '').strip() or '(respuesta vacía)'
+    report_path = os.path.join(output_dir, 'inspection_report.md')
     with open(report_path, 'w', encoding='utf-8') as fh:
         fh.write(report_text + '\n')
-    print(f'[generate_inspection_report] report: {report_path}')
+    print(f'[report] informe: {report_path}')
 
 
 if __name__ == '__main__':
