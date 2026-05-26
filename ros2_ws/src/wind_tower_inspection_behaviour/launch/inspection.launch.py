@@ -32,7 +32,6 @@ def generate_launch_description():
 
     use_cylinder_localizer = LaunchConfiguration('use_cylinder_localizer')
     use_ps5 = LaunchConfiguration('use_ps5')
-    ps5_device_path = LaunchConfiguration('ps5_device_path')
     use_stability_monitor = LaunchConfiguration('use_stability_monitor')
     imu_auto_calibrate_on_start = LaunchConfiguration('imu_auto_calibrate_on_start')
     stability_ignore_pitch_for_lock = LaunchConfiguration('stability_ignore_pitch_for_lock')
@@ -154,11 +153,6 @@ def generate_launch_description():
             'use_ps5',
             default_value='true',
             description='Launch DualSense evdev driver and PS5 inspection teleop helper.',
-        ),
-        DeclareLaunchArgument(
-            'ps5_device_path',
-            default_value='auto',
-            description='DualSense evdev path, for example /dev/input/event0. Use auto to detect by device name.',
         ),
         DeclareLaunchArgument(
             'use_stability_monitor',
@@ -484,7 +478,6 @@ def generate_launch_description():
             name='dualsense_joy',
             output='screen',
             parameters=[{
-                'device_path': ps5_device_path,
                 'autonomous_stop_button_index': ps5_stop_button_index,
             }],
             condition=IfCondition(use_ps5),
