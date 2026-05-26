@@ -79,10 +79,12 @@ class PS5Teleop(Node):
         self._mission_pub  = self.create_publisher(String, '/inspection/mission_command', 10)
 
         # Intercept cmd_vel de Clearpath y republica escalado.
-        # En ROS2 Jazzy Clearpath puede publicar TwistStamped en lugar de Twist.
-        # Se suscriben ambos topics; el que llegue primero activa el escalado.
+        # En ROS2 Jazzy/Clearpath el topic /robot/cmd_vel es TwistStamped
+        # (velocity_smoother con enable_stamped_cmd_vel: true).
+        # IMPORTANTE: NO suscribirse con dos tipos distintos al mismo topic —
+        # eso causa "contains more than one type" en el grafo DDS y rompe
+        # ros2 topic echo y otros herramientas de diagnóstico.
         self._cmd_vel_pub  = self.create_publisher(Twist, '/robot/cmd_vel_scaled', 10)
-        self.create_subscription(Twist, '/robot/cmd_vel', self._cmd_vel_cb, 10)
         self.create_subscription(
             TwistStamped, '/robot/cmd_vel', self._cmd_vel_stamped_cb, 10)
 
@@ -122,17 +124,6 @@ class PS5Teleop(Node):
         )
 
     # ── cmd_vel scaler ────────────────────────────────────────────────────────
-    def _cmd_vel_cb(self, msg: Twist):
-        """Escala el cmd_vel (Twist) de Clearpath y republica en /robot/cmd_vel_scaled."""
-        if self._autonomous_active:
-            return
-        factor = SPEED_FACTORS[self._speed_level]
-        scaled = Twist()
-        scaled.linear.x  = msg.linear.x  * factor
-        scaled.linear.y  = msg.linear.y  * factor
-        scaled.angular.z = msg.angular.z * factor
-        self._cmd_vel_pub.publish(scaled)
-
     def _cmd_vel_stamped_cb(self, msg: TwistStamped):
         """Escala el cmd_vel (TwistStamped) de Clearpath Jazzy y republica como Twist."""
         if self._autonomous_active:

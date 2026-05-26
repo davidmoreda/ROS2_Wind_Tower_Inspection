@@ -1,0 +1,30 @@
+# ── Waypoints nombrados del entorno ───────────────────────────────────────────
+#
+# CÓMO OBTENER LAS COORDENADAS:
+#   1. Lanza navigation_amcl.launch.py y RViz
+#   2. Mueve el robot al punto deseado (mando o Nav2)
+#   3. Ejecuta:  ros2 topic echo /amcl_pose --once
+#      o en RViz: añade panel "Pose" y lee pose.pose.position
+#   4. Copia x, y, yaw aquí
+#
+# CONVERSIÓN DE YAW (heading del robot al llegar):
+#   0.0   = mirando al Este  (+X del mapa)
+#   1.5708 = mirando al Norte (+Y del mapa)
+#   3.1416 = mirando al Oeste (-X del mapa)
+#   -1.5708 = mirando al Sur (-Y del mapa)
+#
+# ── RELLENA ESTOS VALORES DESPUÉS DE GUARDAR EL MAPA ─────────────────────────
+
+waypoints:
+
+  charging_station:
+    description: "Estación de carga — habitación 1"
+    x: 0.0        # <-- RELLENAR tras guardar el mapa
+    y: 0.0        # <-- RELLENAR tras guardar el mapa
+    yaw: 0.0      # <-- orientación al llegar (radianes)
+
+  maintenance_station:
+    description: "Zona de mantenimiento — habitación 2"
+    x: 0.0        # <-- RELLENAR tras guardar el mapa
+    y: 0.0        # <-- RELLENAR tras guardar el mapa
+    yaw: 0.0      # <-- orientación al llegar (radianes)

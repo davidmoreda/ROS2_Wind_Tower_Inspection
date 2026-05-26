@@ -30,6 +30,26 @@ Uso:
 Arquitectura TF:
   map → odom        (publicado por SLAM Toolbox)
   odom → base_link  (publicado por Clearpath EKF1, ya activo)
+
+Arbitraje mando vs Nav2 (twist_mux de Clearpath):
+  El twist_mux interno de Clearpath (/robot/twist_mux) decide quién mueve
+  el Husky. Las prioridades son (mayor número = mayor prioridad):
+
+    slot joy      → /robot/joy_teleop/cmd_vel   prioridad 10  (mando PS5, vía Clearpath teleop_twist_joy)
+    slot external → /robot/cmd_vel              prioridad  1  (Nav2 velocity_smoother)
+
+  Regla: mientras el mando envíe mensajes al slot joy, el Husky obedece al
+  mando. En cuanto el stick se suelta, el slot joy expira (timeout 0.5 s) y
+  twist_mux pasa el control al slot external (Nav2).
+  NO es necesario matar procesos ni silenciar el joystick — el arbitraje
+  es automático y reversible.
+
+  El mando PS5 (dualsense_joy + ps5_teleop) sigue activo durante la
+  navegación para:
+    - Controlar el brazo UR5e (stick derecho + L2)
+    - Controlar el virador (botones X / Cuadrado)
+    - Emitir START_AUTO / STOP de misión (Triángulo / Círculo)
+    - Tomar el control del Husky en cualquier momento (pulsando R1 + stick izq)
 """
 
 import os
@@ -66,6 +86,32 @@ def generate_launch_description():
     nav2_rviz_cfg = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+
+    # ── Mando PS5 — disponible durante navegación autónoma ───────────────────
+    # El arbitraje Nav2 ↔ mando lo gestiona el twist_mux de Clearpath:
+    #   - Clearpath teleop_twist_joy → /robot/joy_teleop/cmd_vel  (prioridad 10)
+    #   - Nav2 velocity_smoother     → /robot/cmd_vel             (prioridad 1, slot external)
+    # Mientras el stick del Husky esté en reposo, el slot joy expira en 0.5 s
+    # y twist_mux cede el control a Nav2. Al mover el stick, el mando recupera
+    # el control inmediatamente sin necesidad de matar ningún proceso.
+    # ps5_teleop gestiona brazo, virador y comandos de misión; NO interfiere
+    # con el flujo cmd_vel del Husky (en modo autónomo su scaler retorna sin
+    # publicar gracias a la flag _autonomous_active).
+    dualsense_joy = Node(
+        package='wind_tower_bringup',
+        executable='dualsense_joy',
+        name='dualsense_joy',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
+
+    ps5_teleop = Node(
+        package='wind_tower_bringup',
+        executable='ps5_teleop',
+        name='ps5_teleop',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+    )
 
     # ── pointcloud_to_laserscan + scan_bridge + SLAM ─────────────────────────
     # Delay de 15s para que el reloj de Gazebo esté estable antes de arrancar
@@ -121,12 +167,12 @@ def generate_launch_description():
                 name='controller_server',
                 output='screen',
                 parameters=[nav2_params, {'use_sim_time': use_sim_time}],
-                # Cadena cmd_vel: controller → cmd_vel_smoothed → velocity_smoother → /robot/cmd_vel
-                # Clearpath twist_mux (use_stamped: True) consume /robot/cmd_vel como TwistStamped.
-                # CRÍTICO: remap cmd_vel → cmd_vel_smoothed para conectar con velocity_smoother.
-                # Sin este remap, el controller publica en /cmd_vel y el smoother escucha
-                # cmd_vel_smoothed → los dos nodos nunca se comunican → robot inmóvil.
-                remappings=remappings_tf + [('cmd_vel', 'cmd_vel_smoothed')],
+                # Cadena cmd_vel estándar Nav2:
+                #   controller_server → cmd_vel (topic por defecto del nodo)
+                #   velocity_smoother suscribe cmd_vel, publica cmd_vel_smoothed
+                #   remap cmd_vel_smoothed → /robot/cmd_vel en velocity_smoother
+                # NO se remapea cmd_vel aquí — el smoother suscribe a cmd_vel directamente.
+                remappings=remappings_tf,
             ),
             Node(
                 package='nav2_smoother',
@@ -150,7 +196,9 @@ def generate_launch_description():
                 name='behavior_server',
                 output='screen',
                 parameters=[nav2_params, {'use_sim_time': use_sim_time}],
-                remappings=remappings_tf,
+                # behavior_server también publica cmd_vel (spin, backup, drive_on_heading).
+                # Debe apuntar a /robot/cmd_vel para que los recoveries muevan el robot.
+                remappings=remappings_tf + [('cmd_vel', '/robot/cmd_vel')],
             ),
             Node(
                 package='nav2_bt_navigator',
@@ -174,7 +222,10 @@ def generate_launch_description():
                 name='velocity_smoother',
                 output='screen',
                 parameters=[nav2_params, {'use_sim_time': use_sim_time}],
-                remappings=remappings_tf,
+                # velocity_smoother: SUB cmd_vel (salida de controller_server)
+                #                    PUB cmd_vel_smoothed → remapeado a /robot/cmd_vel
+                # /robot/cmd_vel es el slot external del twist_mux de Clearpath (TwistStamped).
+                remappings=remappings_tf + [('cmd_vel_smoothed', '/robot/cmd_vel')],
             ),
             # ── Lifecycle manager — solo nodos que tenemos configurados ────────
             Node(
@@ -213,6 +264,8 @@ def generate_launch_description():
     return LaunchDescription([
         declare_use_sim_time,
         declare_rviz,
+        dualsense_joy,
+        ps5_teleop,
         perception_and_slam,
         navigation,
         rviz,
