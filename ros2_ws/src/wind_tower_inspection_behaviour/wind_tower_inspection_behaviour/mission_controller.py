@@ -11,9 +11,12 @@ Funcionalidades:
 """
 
 import math
+import subprocess
+import sys
 import threading
 import yaml
 from pathlib import Path
+from typing import Optional
 
 import rclpy
 from rclpy.action import ActionClient
@@ -29,7 +32,15 @@ from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 
-from flask import Flask, jsonify, redirect, render_template_string, request
+from flask import (
+    Flask,
+    abort,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    send_from_directory,
+)
 
 from wind_tower_inspection_behaviour.inspection_bt import build_mission_tree
 from wind_tower_inspection_behaviour.natural_language_commands import (
@@ -88,6 +99,11 @@ CHARGE_CONFIRM_TOLERANCE_M = 0.75
 CHARGE_CONFIRM_MAX_COV_XY = 0.35
 CHARGE_SEARCH_SPIN_SEC = 16.0
 CHARGE_SEARCH_RETRY_DELAY_SEC = 2.0
+
+# ── Informe de inspección ──────────────────────────────────────────────────────
+INSPECTIONS_ROOT = Path('~/ROS2_Wind_Tower_Inspection/inspections').expanduser()
+REPORT_SUBPROCESS_TIMEOUT_SEC = 240.0
+REPORT_MODULE = 'wind_tower_perception.scripts.generate_inspection_report'
 
 
 # ── Nodo ROS2 ──────────────────────────────────────────────────────────────────
@@ -160,6 +176,17 @@ class MissionController(Node):
         self._charging_search_start_time = now
         self._charging_search_timer = None
         self._charging_search_retry_timer = None
+
+        # Estado del informe post-inspección
+        self._report_status = 'idle'   # idle | running | done | done_no_llm | error
+        self._report_run_id = ''
+        self._report_run_dir = ''
+        self._report_summary_md = ''
+        self._report_full_md = ''
+        self._report_has_defect_map = False
+        self._report_message = ''
+        self._report_started_at = 0.0
+        self._report_thread: Optional[threading.Thread] = None
 
         self._nav1 = ActionClient(self, NavigateToPose,       'navigate_to_pose')
         self._navN = ActionClient(self, NavigateThroughPoses, 'navigate_through_poses')
@@ -814,6 +841,7 @@ class MissionController(Node):
 
         if finished:
             self._complete_active_queue_item(success=True)
+            self._trigger_report_generation()
             self._start_next_queued_if_idle()
             return
         if continue_return:
@@ -1640,6 +1668,119 @@ class MissionController(Node):
         m.text    = f'Bateria: {batt:.0f}%\n{status}{alarm_text}'
         return m
 
+    # ── Generación del informe post-inspección ─────────────────────────────────
+    def _latest_run_dir(self) -> Optional[Path]:
+        try:
+            candidates = [p for p in INSPECTIONS_ROOT.iterdir()
+                          if p.is_dir() and p.name.startswith('run_')]
+        except FileNotFoundError:
+            return None
+        if not candidates:
+            return None
+        candidates.sort(key=lambda p: p.name, reverse=True)
+        return candidates[0]
+
+    def _trigger_report_generation(self):
+        """Lanza generate_inspection_report en un hilo al terminar la inspección."""
+        run_dir = self._latest_run_dir()
+        if run_dir is None:
+            self.get_logger().warn(
+                f'No se encontró ninguna run-dir en {INSPECTIONS_ROOT}; '
+                'omito generación de informe.'
+            )
+            return
+        with self._lock:
+            if self._report_thread is not None and self._report_thread.is_alive():
+                self.get_logger().info(
+                    'Ya hay un informe en curso; ignoro nuevo disparador.'
+                )
+                return
+            self._report_status = 'running'
+            self._report_run_id = run_dir.name
+            self._report_run_dir = str(run_dir)
+            self._report_summary_md = ''
+            self._report_full_md = ''
+            self._report_has_defect_map = False
+            self._report_message = 'Generando resumen e informe…'
+            self._report_started_at = self._now_sec()
+            self._report_thread = threading.Thread(
+                target=self._run_report_subprocess,
+                args=(run_dir,),
+                daemon=True,
+            )
+            self._report_thread.start()
+        self.get_logger().info(
+            f'Lanzo generación de informe para {run_dir.name}'
+        )
+
+    def _run_report_subprocess(self, run_dir: Path):
+        cmd = [
+            sys.executable, '-m', REPORT_MODULE,
+            '--run-dir', str(run_dir),
+        ]
+        rc = -1
+        stderr = ''
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=REPORT_SUBPROCESS_TIMEOUT_SEC,
+            )
+            rc = proc.returncode
+            stderr = proc.stderr or ''
+        except subprocess.TimeoutExpired:
+            stderr = f'Timeout tras {REPORT_SUBPROCESS_TIMEOUT_SEC:.0f} s'
+        except FileNotFoundError as exc:
+            stderr = f'No se pudo ejecutar el generador: {exc}'
+
+        report_dir = run_dir / 'report'
+        summary_path = report_dir / 'inspection_summary.md'
+        report_path = report_dir / 'inspection_report.md'
+        defect_map_path = report_dir / 'defect_map.png'
+
+        summary_md = ''
+        report_md = ''
+        if summary_path.is_file():
+            try:
+                summary_md = summary_path.read_text(encoding='utf-8')
+            except OSError:
+                pass
+        if report_path.is_file():
+            try:
+                report_md = report_path.read_text(encoding='utf-8')
+            except OSError:
+                pass
+
+        if rc == 0 and summary_md and report_md:
+            status = 'done'
+            message = 'Informe generado correctamente.'
+        elif summary_md:
+            # rc == 2 → script terminó sin API key, pero summary+map existen
+            status = 'done_no_llm'
+            if rc == 2:
+                message = ('Resumen y mapa listos. Falta GEMINI_API_KEY '
+                           'para generar el informe completo.')
+            else:
+                snippet = stderr.strip().splitlines()[-1] if stderr.strip() else ''
+                message = (f'Resumen y mapa listos; informe LLM no disponible'
+                           f' ({snippet})' if snippet
+                           else 'Resumen y mapa listos; informe LLM no disponible.')
+        else:
+            status = 'error'
+            snippet = stderr.strip().splitlines()[-1] if stderr.strip() else 'sin detalles'
+            message = f'No se pudo generar el resumen (rc={rc}): {snippet}'
+
+        with self._lock:
+            self._report_status = status
+            self._report_summary_md = summary_md
+            self._report_full_md = report_md
+            self._report_has_defect_map = defect_map_path.is_file()
+            self._report_message = message
+
+        log = self.get_logger().info if status != 'error' else self.get_logger().error
+        log(f'[report] {status}: {message}')
+
     # ── Estado para Flask ──────────────────────────────────────────────────────
     def state(self) -> dict:
         with self._lock:
@@ -1663,6 +1804,22 @@ class MissionController(Node):
                 'queue_active': dict(self._active_queue_item) if self._active_queue_item else None,
                 'queue_pending': [dict(item) for item in self._mission_queue],
                 'queue_paused': self._queue_paused,
+                'report': {
+                    'status': self._report_status,
+                    'run_id': self._report_run_id,
+                    'message': self._report_message,
+                    'summary_md': self._report_summary_md,
+                    'report_md': self._report_full_md,
+                    'defect_map_url': (
+                        f'/inspections/{self._report_run_id}/report/defect_map.png'
+                        if self._report_has_defect_map and self._report_run_id
+                        else ''
+                    ),
+                    'run_url': (
+                        f'/inspections/{self._report_run_id}/'
+                        if self._report_run_id else ''
+                    ),
+                },
             }
 
 
@@ -1675,7 +1832,7 @@ _HTML = r'''<!DOCTYPE html>
 <title>Wind Tower Mission</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',sans-serif;background:#0d0d1a;color:#ddd;padding:24px;max-width:500px;margin:auto}
+body{font-family:'Segoe UI',sans-serif;background:#0d0d1a;color:#ddd;padding:24px;max-width:720px;margin:auto}
 h1{color:#00d4ff;margin-bottom:18px;font-size:1.25rem;letter-spacing:1px}
 .bar-wrap{background:#222;border-radius:12px;overflow:hidden;height:34px;margin-bottom:14px;border:1px solid #333}
 .bar-fill{height:100%;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:.9rem;transition:width .6s}
@@ -1708,6 +1865,36 @@ h1{color:#00d4ff;margin-bottom:18px;font-size:1.25rem;letter-spacing:1px}
 .r{background:#8b0000;color:#fff;grid-column:1/-1;font-size:1.05rem;letter-spacing:1px}
 .sub{display:block;font-size:.7rem;opacity:.7;font-weight:normal;margin-top:4px}
 .ok{color:#2ecc71}
+.report{margin-top:22px;background:#0f0f1e;border:1px solid #2a3158;border-radius:10px;padding:14px}
+.report-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
+.report-head h2{font-size:1rem;color:#b9d7ff;letter-spacing:.5px}
+.report-status{font-size:.78rem;padding:3px 8px;border-radius:999px;background:#1a3a6b;color:#cfe1ff}
+.report-status.running{background:#3a5a1a}
+.report-status.done{background:#1a6b30}
+.report-status.done_no_llm{background:#8a6b00}
+.report-status.error{background:#7b1a1a}
+.report-message{font-size:.82rem;color:#a9b7ff;margin-bottom:10px}
+.report-links{font-size:.78rem;margin-bottom:10px}
+.report-links a{color:#7fc4ff;text-decoration:none;margin-right:12px}
+.report-links a:hover{text-decoration:underline}
+.report-map{margin:10px 0}
+.report-map img{width:100%;border-radius:6px;background:#fff}
+.md{font-size:.86rem;line-height:1.55;color:#dfe5f7}
+.md h1,.md h2,.md h3{color:#cfe1ff;margin:10px 0 6px;line-height:1.3}
+.md h1{font-size:1.05rem;border-bottom:1px solid #2a3158;padding-bottom:4px}
+.md h2{font-size:.98rem}
+.md h3{font-size:.9rem}
+.md p{margin:6px 0}
+.md ul,.md ol{margin:6px 0 6px 22px}
+.md li{margin:2px 0}
+.md code{background:#1b1b2e;padding:1px 5px;border-radius:4px;font-size:.82rem}
+.md table{border-collapse:collapse;margin:8px 0;font-size:.78rem;width:100%}
+.md th,.md td{border:1px solid #2a3158;padding:4px 6px;text-align:left}
+.md th{background:#1a2245;color:#cfe1ff}
+.md strong{color:#fff}
+.md details{margin:10px 0;background:#11121f;border:1px solid #2a3158;border-radius:6px;padding:8px 10px}
+.md details summary{cursor:pointer;color:#cfe1ff;font-weight:bold}
+.report-empty{font-size:.82rem;color:#7f89a8;font-style:italic}
 </style>
 </head>
 <body>
@@ -1807,6 +1994,25 @@ h1{color:#00d4ff;margin-bottom:18px;font-size:1.25rem;letter-spacing:1px}
     </button>
   </form>
 </div>
+
+<div class="report">
+  <div class="report-head">
+    <h2>Resumen de inspección</h2>
+    <span id="report-status" class="report-status idle">sin datos</span>
+  </div>
+  <div id="report-run" class="report-message"></div>
+  <div id="report-message" class="report-message"></div>
+  <div id="report-links" class="report-links"></div>
+  <div id="report-map" class="report-map" style="display:none">
+    <img id="report-map-img" alt="Mapa de defectos">
+  </div>
+  <div id="report-summary" class="md"></div>
+  <div id="report-full" class="md"></div>
+  <div id="report-empty" class="report-empty">
+    Aún no hay informe. Se generará automáticamente al terminar una inspección.
+  </div>
+</div>
+
 <script>
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -1841,6 +2047,134 @@ function renderQueue(state) {
   }
 
   paused.style.display = state.queue_paused ? 'block' : 'none';
+}
+
+// ── Minimal Markdown -> HTML (headings, bold/italic, lists, tables, code) ──
+function renderMarkdown(src) {
+  if (!src) return '';
+  const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+  const inlineFmt = (s) => esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  while (i < lines.length) {
+    let line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    // Heading
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const lvl = Math.min(h[1].length, 3);
+      out.push(`<h${lvl}>${inlineFmt(h[2].trim())}</h${lvl}>`);
+      i++;
+      continue;
+    }
+    // Table (line with |, next line is separator)
+    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[-: |]+\|[-: |]+/.test(lines[i + 1])) {
+      const splitRow = (row) => row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
+      const headers = splitRow(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|')) {
+        rows.push(splitRow(lines[i]));
+        i++;
+      }
+      const th = headers.map((c) => `<th>${inlineFmt(c)}</th>`).join('');
+      const trs = rows.map((r) => '<tr>' + r.map((c) => `<td>${inlineFmt(c)}</td>`).join('') + '</tr>').join('');
+      out.push(`<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`);
+      continue;
+    }
+    // Bullet list
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        items.push(`<li>${inlineFmt(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+    // Numbered list
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(`<li>${inlineFmt(lines[i].replace(/^\s*\d+\.\s+/, ''))}</li>`);
+        i++;
+      }
+      out.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+    // Paragraph
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6})\s+/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i]) && !lines[i].includes('|')) {
+      para.push(lines[i]);
+      i++;
+    }
+    if (para.length) out.push(`<p>${inlineFmt(para.join(' '))}</p>`);
+  }
+  return out.join('\n');
+}
+
+const REPORT_STATUS_LABEL = {
+  idle: 'sin datos',
+  running: 'generando…',
+  done: 'completo',
+  done_no_llm: 'sin LLM',
+  error: 'error',
+};
+
+function renderReport(report) {
+  const statusEl = document.getElementById('report-status');
+  const runEl = document.getElementById('report-run');
+  const msgEl = document.getElementById('report-message');
+  const linksEl = document.getElementById('report-links');
+  const mapWrap = document.getElementById('report-map');
+  const mapImg = document.getElementById('report-map-img');
+  const summaryEl = document.getElementById('report-summary');
+  const fullEl = document.getElementById('report-full');
+  const emptyEl = document.getElementById('report-empty');
+
+  const r = report || {};
+  const status = r.status || 'idle';
+  statusEl.className = `report-status ${status}`;
+  statusEl.textContent = REPORT_STATUS_LABEL[status] || status;
+
+  if (status === 'idle') {
+    emptyEl.style.display = 'block';
+    runEl.textContent = '';
+    msgEl.textContent = '';
+    linksEl.innerHTML = '';
+    mapWrap.style.display = 'none';
+    summaryEl.innerHTML = '';
+    fullEl.innerHTML = '';
+    return;
+  }
+  emptyEl.style.display = 'none';
+  runEl.innerHTML = r.run_id ? `<b>Run:</b> ${esc(r.run_id)}` : '';
+  msgEl.textContent = r.message || '';
+
+  const links = [];
+  if (r.run_url) links.push(`<a href="${esc(r.run_url)}" target="_blank">carpeta del run</a>`);
+  if (r.defect_map_url) links.push(`<a href="${esc(r.defect_map_url)}" target="_blank">mapa de defectos</a>`);
+  linksEl.innerHTML = links.join('');
+
+  if (r.defect_map_url) {
+    mapImg.src = r.defect_map_url + `?t=${encodeURIComponent(r.run_id || '')}`;
+    mapWrap.style.display = 'block';
+  } else {
+    mapWrap.style.display = 'none';
+  }
+
+  summaryEl.innerHTML = r.summary_md ? renderMarkdown(r.summary_md) : '';
+  if (r.report_md) {
+    fullEl.innerHTML =
+      '<details open><summary>Informe completo (LLM)</summary>' +
+      renderMarkdown(r.report_md) +
+      '</details>';
+  } else {
+    fullEl.innerHTML = '';
+  }
 }
 
 function renderState(state) {
@@ -1879,6 +2213,7 @@ function renderState(state) {
   }
 
   renderQueue(state);
+  renderReport(state.report);
 }
 
 async function refreshState() {
@@ -1904,6 +2239,7 @@ document.getElementById('text-command-form').addEventListener('submit', async (e
   }
 });
 
+refreshState();
 setInterval(refreshState, 1000);
 
 // ── Web Speech API (voz por navegador) ───────────────────────────────────────
@@ -2030,6 +2366,19 @@ def _flask_thread(node: MissionController):
     @app.route('/api/clear_queue', methods=['POST'])
     def api_clear_queue():
         return jsonify({'removed': node.clear_queue(), 'queue': node.queue_state()})
+
+    @app.route('/inspections/<path:rel>')
+    def serve_inspection_file(rel: str):
+        root = INSPECTIONS_ROOT.resolve()
+        try:
+            target = (root / rel).resolve()
+        except OSError:
+            abort(404)
+        if root not in target.parents and target != root:
+            abort(404)
+        if not target.is_file():
+            abort(404)
+        return send_from_directory(str(target.parent), target.name)
 
     import logging
     log = logging.getLogger('werkzeug')
