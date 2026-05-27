@@ -10,31 +10,58 @@ Guía de arranque rápido con el modelo `best.pt` ya entrenado.
 
 ```bash
 cd ~/ROS2_Wind_Tower_Inspection/ros2_ws
-ai-on
 source install/setup.bash
-export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ```
+
+`CYCLONEDDS_URI` y otras variables ya están en `~/.bashrc`. `ai-on` **solo** lo necesitas en la terminal del detector (T2). Para `colcon build` y herramientas GUI de ROS (`rqt_*`), **no actives el venv**.
 
 ---
 
 ## Misión completa — 3 terminales
 
-**T1 — Simulación:**
+**T1 — Simulación con mundo de defectos:**
 ```bash
-ros2 launch wind_tower_bringup simulation.launch.py
+ros2 launch wind_tower_bringup simulation.launch.py \
+    world_file:=$HOME/ROS2_Wind_Tower_Inspection/ros2_ws/src/wind_tower_simulation/worlds/wind_tower_world_defects_actors.sdf
 ```
 Esperar: `platform_velocity_controller: Configured and activated`
 
-**T2 — Percepción con YOLO:**
+**T2 — Percepción con YOLO** (única terminal con `ai-on`):
 ```bash
+ai-on
 ros2 launch wind_tower_perception perception.launch.py
 ```
-Esperar: `Defect detector ready (backend=yolo ...)`
+Esperar: `Defect detector ready (backend=yolo ...)` y `Image capture ready (run_id=run_..., dir=...)`. **Apunta el `run_id`** para luego generar el informe.
 
 **T3 — Misión:**
 ```bash
 ros2 launch wind_tower_inspection_behaviour inspection.launch.py
 ```
+
+---
+
+## Troubleshooting — Gazebo se abre y se cierra
+
+Si al lanzar T1 (simulación) Gazebo arranca y muere a los segundos, suele ser por procesos residuales y memoria compartida de DDS sin liberar. Limpia antes de relanzar:
+
+```bash
+# 1. Mata cualquier proceso residual
+pkill -9 -f "gz sim" 2>/dev/null
+pkill -9 -f "gzserver\|gzclient" 2>/dev/null
+pkill -9 -f "ruby.*gz" 2>/dev/null
+pkill -9 -f "ros2 launch" 2>/dev/null
+pkill -9 -f "parameter_bridge\|robot_state_publisher" 2>/dev/null
+
+# 2. Limpia memoria compartida DDS y caches de Gazebo
+rm -f /dev/shm/cdds_* /dev/shm/iceoryx* /dev/shm/gz_* 2>/dev/null
+rm -rf ~/.gz/sim/cache /tmp/.gazebo 2>/dev/null
+
+# 3. Verifica que no queda nada vivo
+sleep 2
+ps aux | grep -E "gz|ros2|gazebo" | grep -v grep
+```
+
+Si `ps aux` no devuelve nada, está limpio y puedes relanzar T1. Si devuelve algo, mata esos PIDs con `kill -9 <PID>` y reintenta.
 
 ---
 
