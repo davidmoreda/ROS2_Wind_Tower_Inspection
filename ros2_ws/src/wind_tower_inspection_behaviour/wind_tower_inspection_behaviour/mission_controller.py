@@ -62,7 +62,7 @@ INSP_CENTER_X = 0.245
 INSP_START = (INSP_CENTER_X, 10.246)
 INSP_END   = (INSP_CENTER_X, 39.579)
 INSP_STEP  = 1.0    # metros entre paradas de inspeccion
-INSP_PAUSE_SEC = 60.0
+INSP_PAUSE_SEC = 1.0
 INSP_MAX_LATERAL_ERROR = 1.2   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
 INSP_MAX_ROLL_DEG = 8.0        # gravedad vertical: roll casi plano en calle axial
 INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
@@ -1520,10 +1520,10 @@ class MissionController(Node):
         if search_charging_reason:
             self._start_charging_search(search_charging_reason)
             return
-        if 'send_next' in locals():
+        if send_next:
             self._send_next_inspection_goal()
             return
-        if 'start_pause' in locals():
+        if start_pause:
             self._start_inspection_pause()
             return
         if publish:
