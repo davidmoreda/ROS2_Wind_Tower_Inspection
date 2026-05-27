@@ -38,6 +38,13 @@ htmlcov/
 .DS_Store
 Thumbs.db
 desktop.ini
+*:Zone.Identifier
+
+# Datasets descargables (canónicos en Roboflow)
+ros2_ws/*.zip
+
+# Outputs de misiones (datos, no código)
+inspections/
 
 # Crash dumps / stray logs
 core
