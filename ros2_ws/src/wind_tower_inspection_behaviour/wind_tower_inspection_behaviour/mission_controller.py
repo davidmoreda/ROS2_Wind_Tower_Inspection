@@ -62,7 +62,7 @@ INSP_CENTER_X = 0.245
 INSP_START = (INSP_CENTER_X, 10.246)
 INSP_END   = (INSP_CENTER_X, 39.579)
 INSP_STEP  = 1.0    # metros entre paradas de inspeccion
-INSP_PAUSE_SEC = 60.0
+INSP_PAUSE_SEC = 1.0
 INSP_MAX_LATERAL_ERROR = 1.2   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
 INSP_MAX_ROLL_DEG = 8.0        # gravedad vertical: roll casi plano en calle axial
 INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
@@ -732,18 +732,22 @@ class MissionController(Node):
         self._send_through(poses)
 
     def _go_inspection(self):
-        x0, y0 = INSP_START
-        x1, y1 = INSP_END
-        n = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / INSP_STEP))
         ramp = self._wp.get('ramp_top', {})
         inicio = self._wp.get('inicio_tramo', {})
+        fin = self._wp.get('fin_tramo', {})
 
-        # Aproximación en dos pasos: ramp_top → inicio_tramo
-        # El inicio_tramo es también el primer punto de scan, así que los
-        # puntos de inspección empiezan desde el segundo (índice 1).
+        # Leer coordenadas desde waypoints.yaml (fuente única de verdad)
+        x0 = inicio.get('x', INSP_START[0])
+        y0 = inicio.get('y', INSP_START[1])
+        x1 = fin.get('x', INSP_END[0])
+        y1 = fin.get('y', INSP_END[1])
+
+        n = max(1, math.ceil(math.hypot(x1 - x0, y1 - y0) / INSP_STEP))
+
+        # Aproximación: ramp_top → inicio_tramo
         approach = [
             self._pose(ramp.get('x', 0.160), ramp.get('y', 6.901), math.pi / 2),
-            self._pose(inicio.get('x', x0), inicio.get('y', y0), math.pi / 2),
+            self._pose(x0, y0, math.pi / 2),
         ]
         points = []
         for i in range(n + 1):
@@ -1520,10 +1524,10 @@ class MissionController(Node):
         if search_charging_reason:
             self._start_charging_search(search_charging_reason)
             return
-        if 'send_next' in locals():
+        if send_next:
             self._send_next_inspection_goal()
             return
-        if 'start_pause' in locals():
+        if start_pause:
             self._start_inspection_pause()
             return
         if publish:

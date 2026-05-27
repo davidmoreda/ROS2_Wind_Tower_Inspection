@@ -99,7 +99,7 @@ class NaturalLanguageCommandParser:
                 'start_inspection, cancel, unknown. '
                 'Usa maintenance_station para frases como "ve a mantenimiento"; '
                 'charging_station para "carga", "cargador" o "estacion de carga"; '
-                'home_inspection para volver a la base/home de inspeccion; '
+                'home_inspection para volver a la base/home/casa de inspeccion; '
                 'start_inspection para iniciar o continuar la inspeccion; '
                 'cancel para parar, cancelar o e-stop. '
                 'Si hay ambiguedad peligrosa, usa unknown. '
@@ -162,7 +162,7 @@ class NaturalLanguageCommandParser:
             ),
             (
                 'home_inspection',
-                ('home', 'base', 'inicio', 'rampa', 'home inspeccion', 'home inspection'),
+                ('home', 'casa', 'base', 'inicio', 'rampa', 'home inspeccion', 'home inspection'),
                 'palabra clave de home inspeccion',
             ),
             (
