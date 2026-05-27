@@ -68,6 +68,8 @@ class ImageCaptureNode(Node):
         self._mission_state: str = 'UNKNOWN'
         self._last_detection_payload: Optional[dict] = None
         self._last_detection_stamp_s: float = 0.0
+        self._last_projected_payload: Optional[dict] = None
+        self._last_projected_stamp_s: float = 0.0
 
         self._run_id = self._make_run_id()
         self._run_dir = os.path.join(
@@ -86,6 +88,8 @@ class ImageCaptureNode(Node):
             String, self._cylindrical_pose_topic, self._cylindrical_cb, 10)
         self.create_subscription(
             String, self._mission_state_topic, self._mission_state_cb, 10)
+        self.create_subscription(
+            String, self._defects_projected_topic, self._projected_cb, 10)
 
         self.get_logger().info(
             f'Image capture ready (run_id={self._run_id}, dir={self._run_dir}).'
@@ -100,6 +104,8 @@ class ImageCaptureNode(Node):
             'cylindrical_pose_topic', '/inspection/cylindrical_pose')
         self.declare_parameter(
             'mission_state_topic', '/inspection/state_text')
+        self.declare_parameter(
+            'defects_projected_topic', '/inspection/defects/cylindrical')
 
         self.declare_parameter('output_root', '~/ROS2_Wind_Tower_Inspection/inspections')
 
@@ -122,6 +128,8 @@ class ImageCaptureNode(Node):
             self.get_parameter('cylindrical_pose_topic').value)
         self._mission_state_topic = str(
             self.get_parameter('mission_state_topic').value)
+        self._defects_projected_topic = str(
+            self.get_parameter('defects_projected_topic').value)
 
         self._output_root = str(self.get_parameter('output_root').value)
         self._save_on_detection = bool(
@@ -171,6 +179,37 @@ class ImageCaptureNode(Node):
     def _mission_state_cb(self, msg: String):
         with self._lock:
             self._mission_state = str(msg.data).strip() or 'UNKNOWN'
+
+    def _projected_cb(self, msg: String):
+        try:
+            payload = json.loads(msg.data)
+        except json.JSONDecodeError:
+            return
+        with self._lock:
+            self._last_projected_payload = payload
+            self._last_projected_stamp_s = self._now_s()
+
+    @staticmethod
+    def _match_projected(det: dict, projected_payload: Optional[dict]) -> Optional[dict]:
+        """Empareja una detección (cx_px, cy_px) con su proyección por píxel."""
+        if not projected_payload:
+            return None
+        target_u = float(det.get('cx_px', 0.0))
+        target_v = float(det.get('cy_px', 0.0))
+        target_cls = str(det.get('class_id', ''))
+        best: Optional[dict] = None
+        best_dist2 = 25.0  # ≤ 5 px de tolerancia
+        for entry in projected_payload.get('detections', []):
+            if str(entry.get('class_id', '')) != target_cls:
+                continue
+            pc = entry.get('pixel_center') or {}
+            u = float(pc.get('u', 0.0))
+            v = float(pc.get('v', 0.0))
+            d2 = (u - target_u) ** 2 + (v - target_v) ** 2
+            if d2 < best_dist2:
+                best_dist2 = d2
+                best = entry
+        return best
 
     def _image_cb(self, msg: Image):
         now = self._now_s()
@@ -285,8 +324,26 @@ class ImageCaptureNode(Node):
             json.dump(sidecar, fh, indent=2)
 
         if detections:
+            with self._lock:
+                projected = self._last_projected_payload
+                projected_fresh = (
+                    projected is not None
+                    and (self._now_s() - self._last_projected_stamp_s)
+                    <= self._detection_freshness_s
+                )
+            projected_payload = projected if projected_fresh else None
             with open(self._detections_path, 'a', encoding='utf-8') as fh:
                 for det in detections:
+                    proj = self._match_projected(det, projected_payload)
+                    defect_pose = None
+                    if proj is not None:
+                        defect_pose = {
+                            'x_axial_m': float(proj.get('x_axial_m', 0.0)),
+                            'theta_surface_deg': float(
+                                proj.get('theta_surface_deg', 0.0)),
+                            'theta_world_around_axis_deg': float(
+                                proj.get('theta_world_around_axis_deg', 0.0)),
+                        }
                     line = {
                         'run_id': self._run_id,
                         'frame_index': idx,
@@ -294,6 +351,7 @@ class ImageCaptureNode(Node):
                         'wall_clock_iso': sidecar['wall_clock_iso'],
                         'mission_state': mission_state,
                         'cylindrical_pose': sidecar['cylindrical_pose'],
+                        'defect_cylindrical_pose': defect_pose,
                         'detection': det,
                     }
                     fh.write(json.dumps(line) + '\n')

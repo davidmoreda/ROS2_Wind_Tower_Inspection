@@ -37,7 +37,24 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 
-DEFAULT_MODEL = 'gemini-2.5-flash'
+DEFAULT_MODEL = 'gemini-2.5-flash-lite'
+
+
+def _load_dotenv() -> None:
+    """Carga ~/ROS2_Wind_Tower_Inspection/.env si existe (sin dependencias)."""
+    env_path = os.path.expanduser('~/ROS2_Wind_Tower_Inspection/.env')
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, 'r', encoding='utf-8') as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 CLASS_COLORS = {
     'rust': '#D2691E',          # naranja óxido
@@ -68,15 +85,24 @@ def _angle_diff_deg(a: float, b: float) -> float:
 def _cluster_detections(records, x_tol_m=0.30, theta_tol_deg=5.0) -> List[Cluster]:
     clusters: List[Cluster] = []
     next_id = 1
+    skipped_no_pose = 0
     for rec in records:
         det = rec.get('detection') or {}
+        # Preferir la posición proyectada del defecto (defect_mapper).
+        # Caer al pose del robot solo si no hay proyección.
+        defect_pose = rec.get('defect_cylindrical_pose')
         cyl = rec.get('cylindrical_pose') or {}
-        if not cyl:
+        if defect_pose:
+            x_axial = float(defect_pose.get('x_axial_m', 0.0))
+            theta_surface = float(defect_pose.get('theta_surface_deg', 0.0))
+        elif cyl:
+            x_axial = float(cyl.get('x_m', 0.0))
+            theta_surface = float(cyl.get('theta_surface_deg', 0.0))
+        else:
+            skipped_no_pose += 1
             continue
         class_id = str(det.get('class_id', 'unknown'))
         score = float(det.get('score', 0.0))
-        x_axial = float(cyl.get('x_m', 0.0))
-        theta_surface = float(cyl.get('theta_surface_deg', 0.0))
         image_path = rec.get('image_path')
 
         best: Optional[Cluster] = None
@@ -163,13 +189,31 @@ def _build_text_summary(manifest: dict, clusters: List[Cluster]) -> str:
     return '\n'.join(lines)
 
 
-def _build_defect_map(clusters: List[Cluster], output_path: str) -> None:
-    """Mapa scatter 2D del cilindro desplegado."""
+def _build_defect_map(
+    clusters: List[Cluster],
+    output_path: str,
+    tube_length_m: float = 30.0,
+    x_origin_offset_m: float = 15.0,
+) -> None:
+    """Mapa 2D del cilindro desplegado.
+
+    - Eje X: posición longitudinal en metros, **empieza en 0** (un extremo del
+      tubo); se desplaza el ``x_axial`` interno [-15, +15] m sumando 15 m.
+    - Eje Y: ángulo en grados **centrado en 0** (rango [-180, 180]). 0° es la
+      línea inferior por donde circula el robot.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(11, 6))
+    def _shift_x(x_axial: float) -> float:
+        return x_axial + x_origin_offset_m
+
+    def _theta_centered(theta_deg: float) -> float:
+        t = theta_deg % 360.0
+        return t if t <= 180.0 else t - 360.0
+
+    fig, ax = plt.subplots(figsize=(12, 5.5))
 
     if not clusters:
         ax.text(0.5, 0.5, 'Sin defectos detectados',
@@ -179,10 +223,15 @@ def _build_defect_map(clusters: List[Cluster], output_path: str) -> None:
         for c in clusters:
             by_class.setdefault(c.class_id, []).append(c)
 
+        max_obs = max((c.observations for c in clusters), default=1)
+
+        def _size(obs: int) -> float:
+            return 40.0 + 120.0 * math.sqrt(obs / max(max_obs, 1))
+
         for class_id, group in sorted(by_class.items()):
-            xs = [c.x_axial_m for c in group]
-            ys = [c.theta_surface_deg for c in group]
-            sizes = [60 + c.observations * 25 for c in group]
+            xs = [_shift_x(c.x_axial_m) for c in group]
+            ys = [_theta_centered(c.theta_surface_deg) for c in group]
+            sizes = [_size(c.observations) for c in group]
             color = CLASS_COLORS.get(class_id, DEFAULT_COLOR)
             ax.scatter(xs, ys, c=color, s=sizes, alpha=0.75,
                        edgecolors='black', linewidths=0.6,
@@ -190,17 +239,42 @@ def _build_defect_map(clusters: List[Cluster], output_path: str) -> None:
 
             for c in group:
                 ax.annotate(str(c.cluster_id),
-                            (c.x_axial_m, c.theta_surface_deg),
+                            (_shift_x(c.x_axial_m),
+                             _theta_centered(c.theta_surface_deg)),
                             textcoords='offset points', xytext=(8, 4),
                             fontsize=8, color='black')
 
-        ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+        ax.legend(loc='upper right', fontsize=10, framealpha=0.9,
+                  bbox_to_anchor=(1.0, 1.15), ncol=3)
 
-    ax.set_xlabel('x_axial (m) — posición longitudinal en la torre', fontsize=11)
-    ax.set_ylabel('θ_surface (°) — ángulo alrededor del cilindro', fontsize=11)
-    ax.set_title('Mapa de defectos — cilindro desplegado', fontsize=13)
-    ax.set_ylim(-5, 365)
-    ax.set_yticks([0, 90, 180, 270, 360])
+        xs_all = [_shift_x(c.x_axial_m) for c in clusters]
+        x_min, x_max = min(xs_all), max(xs_all)
+
+        ax.set_xlim(0.0, tube_length_m)
+        ax.set_ylim(-180, 180)
+        ax.set_yticks([-180, -90, 0, 90, 180])
+
+        ax.axvspan(x_min, x_max, color='lightyellow', alpha=0.4, zorder=0)
+
+        coverage_pct = (x_max - x_min) / tube_length_m * 100.0
+        ax.text(0.02, 0.97,
+                f'Zona inspeccionada: x ∈ [{x_min:.2f}, {x_max:.2f}] m  '
+                f'({coverage_pct:.1f}% del tubo de {tube_length_m:.0f} m)',
+                transform=ax.transAxes, fontsize=9,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.9,
+                          edgecolor='gray'))
+
+    ax.set_xlabel('x (m) — posición longitudinal en la torre  '
+                  '[0 = un extremo, 30 = otro]', fontsize=11)
+    ax.set_ylabel('θ (°) — ángulo alrededor del cilindro  '
+                  '[0 = línea inferior del robot]', fontsize=11)
+    ax.set_title('Mapa de defectos — cilindro desplegado', fontsize=12)
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.7, alpha=0.6)
+    if not clusters:
+        ax.set_xlim(0, tube_length_m)
+        ax.set_ylim(-180, 180)
+        ax.set_yticks([-180, -90, 0, 90, 180])
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -307,10 +381,12 @@ def main(argv=None):
         print('[report] --dry-run activo; no llamo a la API.')
         return
 
+    _load_dotenv()
     api_key = os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        print('[report] GEMINI_API_KEY no configurada. Resumen y mapa generados; '
-              'relanza sin --dry-run cuando tengas la key.', file=sys.stderr)
+        print('[report] GEMINI_API_KEY no configurada (ni en env ni en .env). '
+              'Resumen y mapa generados; relanza sin --dry-run cuando tengas la key.',
+              file=sys.stderr)
         sys.exit(2)
 
     try:

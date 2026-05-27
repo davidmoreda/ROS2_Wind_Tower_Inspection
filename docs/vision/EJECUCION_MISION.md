@@ -63,8 +63,9 @@ ros2 topic echo /inspection/defects/cumulative
 
 Genera con Gemini un informe en español a partir de un `run_*/` de inspección.
 
+La clave API se lee automáticamente de `~/ROS2_Wind_Tower_Inspection/.env` (variable `GEMINI_API_KEY`). También se acepta como env var del shell.
+
 ```bash
-export GEMINI_API_KEY="..."
 python3 -m wind_tower_perception.scripts.generate_inspection_report \
     --run-dir ~/ROS2_Wind_Tower_Inspection/inspections/run_YYYYMMDD_HHMMSS \
     --attach-thumbnails 5
@@ -81,7 +82,8 @@ Genera en `<run-dir>/report/`:
 Opciones útiles:
 
 - `--dry-run` → genera el resumen y el mapa **sin** llamar a la API (útil para iterar tolerancias de clustering sin gastar tokens).
-- `--model gemini-2.5-pro` → modelo más potente cuando interese.
+- `--model gemini-2.5-flash` → más rápido y con más calidad (menos llamadas/día gratis).
+- `--model gemini-2.5-pro` → modelo más potente, mucho más limitado en cuota gratis.
 - `--cluster-x-tol-m 0.30 --cluster-theta-tol-deg 5.0` → tolerancias del clustering de defectos.
 
 Dependencias (una sola vez):
