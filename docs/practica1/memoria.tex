@@ -1,0 +1,167 @@
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\title{Practica 1 -- Simulacion en Gazebo y ROS\,2 Humble}
+\author{[Nombre Apellidos] \\ [NIA] \\ Master en Inteligencia Artificial -- Robotica Inteligente}
+\date{[Fecha de entrega]}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\section{Introduccion y objetivo}
+\label{sec:intro}
+
+% TODO: 1 parrafo. Objetivo de la practica (PDF Sec.1) + decision de usar
+% Husky A200 (Clearpath) en lugar del Tracer AgileX, justificando que el
+% resto del TFM se construye sobre el Husky.
+[Resumen del objetivo: construir una simulacion en Gazebo Sim integrada con
+ROS\,2 Humble que incluya mundo SDF, robot diferencial con IMU y LiDAR,
+puente ROS-Gazebo y teleoperacion por teclado. Se entrega con Husky A200
+en lugar del Tracer porque la plataforma se reutiliza en el resto del TFM
+de inspeccion de torres eolicas con brazo UR5e.]
+
+\section{Descripcion del mundo}
+\label{sec:mundo}
+
+% TODO: describir wind_tower_world.sdf brevemente:
+% - Estructura (nave con tramo de torre eolica), obstaculos, iluminacion.
+% - Parametros de fisica: max_step_size, real_time_factor, gravedad.
+% - Plugins de Gazebo Sim cargados: gz-sim-physics-system,
+%   gz-sim-user-commands-system, gz-sim-scene-broadcaster-system,
+%   gz-sim-sensors-system con render ogre2.
+% - Captura: figures/mundo_gazebo.png
+
+\fig[0.8]{mundo_gazebo.png}{Mundo \texttt{wind\_tower\_world.sdf} cargado en Gazebo Sim.}
+
+\section{Descripcion del robot}
+\label{sec:robot}
+
+% TODO: explicar que es un Husky A200 generado por Clearpath:
+% - URDF generado a partir de robot.yaml (config/robot.yaml).
+% - Topologia: base_link + ruedas + top_plate + attachments.
+% - Pose inicial (-10, 0, 0.3, yaw=1.5708).
+% - Inserta sensores via Clearpath (ver Sec.\ref{sec:sensores}).
+
+\fig[0.8]{robot_rviz.png}{Robot Husky en RViz con TF, malla y enlaces visibles.}
+
+\section{Sensores funcionando (IMU + LiDAR)}
+\label{sec:sensores}
+
+% TODO: tabla resumen:
+% | Sensor          | Modelo Clearpath  | Topico ROS         | Frecuencia |
+% | IMU             | phidgets_spatial  | /imu/data          | ~125 Hz    |
+% | LiDAR 2D        | hokuyo_ust        | /scan              | 10 Hz      |
+% | LiDAR 3D        | velodyne_lidar    | /velodyne_points   | 10 Hz      |
+% Capturas:
+% - figures/imu_echo.png        (terminal con ros2 topic echo --once /imu/data)
+% - figures/scan_rviz.png       (RViz mostrando puntos del LiDAR)
+
+\begin{table}[H]
+  \centering
+  \caption{Sensores declarados en \texttt{robot.yaml} y validados en simulacion.}
+  \label{tab:sensores}
+  \begin{tabularx}{\linewidth}{lllX}
+    \toprule
+    Sensor    & Modelo Clearpath  & Topico ROS         & Validacion \\
+    \midrule
+    IMU       & phidgets\_spatial & \texttt{/imu/data}        & [pendiente] \\
+    LiDAR 2D  & hokuyo\_ust       & \texttt{/scan}            & [pendiente] \\
+    LiDAR 3D  & velodyne\_lidar   & \texttt{/velodyne\_points}& [pendiente] \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Integracion ROS\,2 -- Gazebo}
+\label{sec:integracion}
+
+% TODO: explicar que el bridge lo gestiona Clearpath internamente al
+% spawnear el robot. Listar topicos relevantes ROS<->Gazebo:
+% - /cmd_vel (ROS->Gazebo)
+% - /clock (Gazebo->ROS)
+% - /odom (Gazebo->ROS)
+% - /scan, /imu/data, /velodyne_points (Gazebo->ROS)
+% Probar teleop por teclado con teleop_twist_keyboard publicando en /cmd_vel.
+
+\fig[0.7]{teleop_demo.png}{Teleoperacion por teclado moviendo el Husky en el mundo.}
+
+\section{Actividad D1 -- Experimento de fisica}
+\label{sec:d1}
+
+% TODO: 3 corridas con misma trayectoria fija publicada por el nodo
+% scripts/publish_cmd_vel.py:
+% - E1: friccion baja (<mu> = 0.1).
+% - E2: friccion alta (<mu> = 1.5).
+% - E3: max_step_size = 0.004 (frente al 0.001 por defecto).
+% Resultados:
+% - Plot conjunto X-Y de las 3 trayectorias (plots/d1_trajectories.png).
+% - Tabla con observaciones cualitativas.
+
+\fig[0.85]{../plots/d1_trajectories.png}{Trayectorias \texttt{/odom} de las tres corridas del experimento D1.}
+
+\begin{table}[H]
+  \centering
+  \caption{Observaciones cualitativas del experimento D1.}
+  \label{tab:d1}
+  \begin{tabularx}{\linewidth}{lX}
+    \toprule
+    Corrida & Observaciones \\
+    \midrule
+    E1 (friccion baja) & [pendiente: patinaje en giros, deslizamiento lateral] \\
+    E2 (friccion alta) & [pendiente: giro casi sobre el eje, mayor estabilidad] \\
+    E3 (paso 0.004)    & [pendiente: degradacion de sensores, vibraciones, CPU] \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Problemas encontrados y soluciones}
+\label{sec:problemas}
+
+% TODO: 3-5 viñetas. Ejemplos posibles:
+% - Falta de IMU en el Tracer original -> se sustituye por Husky con
+%   phidgets_spatial configurada via Clearpath.
+% - Sincronizacion robot.yaml repo <-> ~/clearpath: el launcher hace cp
+%   automatico.
+% - [otros que surjan durante la grabacion del experimento]
+
+\begin{itemize}
+  \item [Problema 1]: [descripcion y solucion].
+  \item [Problema 2]: [descripcion y solucion].
+  \item [Problema 3]: [descripcion y solucion].
+\end{itemize}
+
+\section{Checklist de verificacion}
+\label{sec:checklist}
+
+\begin{table}[H]
+  \centering
+  \caption{Checklist final de la Practica 1.}
+  \label{tab:checklist}
+  \begin{tabularx}{\linewidth}{Xll}
+    \toprule
+    Bloque & Estado & Evidencia \\
+    \midrule
+    Mundo carga en Gazebo            & [ ] & Fig.~\ref{fig:mundo_gazebo.png} \\
+    Obstaculos tienen colision       & [ ] & [captura/observacion] \\
+    Robot aparece en pose correcta   & [ ] & Fig.~\ref{fig:robot_rviz.png} \\
+    Robot no vibra ni cae            & [ ] & [observacion] \\
+    DiffDrive responde               & [ ] & Fig.~\ref{fig:teleop_demo.png} \\
+    \texttt{/cmd\_vel} puenteado     & [ ] & \texttt{ros2 topic echo /cmd\_vel} \\
+    \texttt{/odom} publicado         & [ ] & \texttt{ros2 topic echo /odom} \\
+    IMU funcionando                  & [ ] & \texttt{ros2 topic echo /imu/data} \\
+    LiDAR funcionando                & [ ] & \texttt{ros2 topic echo /scan} \\
+    Experimento D1 documentado       & [ ] & Sec.~\ref{sec:d1} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+% TODO: 1 parrafo final con lo aprendido y trabajo futuro.
+[Conclusiones breves: se ha validado el flujo Gazebo Sim + ROS\,2 Humble con
+un robot diferencial real, sensores obligatorios y experimentos de fisica.
+El setup queda listo para construir encima la inspeccion con brazo y vision.]
+
+\end{document}

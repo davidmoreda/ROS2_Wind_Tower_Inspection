@@ -1,0 +1,22 @@
+# latexmk / pdflatex build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.run.xml
+
+# Conservamos el PDF final cuando se entregue; se puede ignorar si se
+# prefiere generarlo siempre desde fuente.
+# *.pdf
+
+# Rosbags de los experimentos D1 (pueden ser grandes); guardamos solo el CSV
+data/**/*.db3
+data/**/*.mcap
+data/**/metadata.yaml
