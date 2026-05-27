@@ -85,6 +85,19 @@ def generate_launch_description():
         value='/usr/lib/python3/dist-packages:' + os.environ.get('PYTHONPATH', ''),
     )
 
+    # Sube el límite de participants de CycloneDDS de ~64 a 240.
+    # Sin esto, Clearpath (~22 nodos) + Nav2 (~10 nodos) + bridges agotan
+    # los slots de DDS, y los nodos que llegan tarde mueren con SIGABRT
+    # "rmw_create_node: failed to create domain". Hardcoded aquí para
+    # independencia del shell del usuario (no depende de ai-on).
+    set_cyclonedds_uri = SetEnvironmentVariable(
+        name='CYCLONEDDS_URI',
+        value='file://' + os.path.join(
+            os.path.expanduser('~'),
+            'ROS2_Wind_Tower_Inspection', 'tools', 'cyclonedds.xml',
+        ),
+    )
+
     packages_paths = [
         os.path.join(p, 'share')
         for p in os.environ.get('AMENT_PREFIX_PATH', '').split(':')
@@ -98,6 +111,11 @@ def generate_launch_description():
             meshes_path,
         ] + packages_paths),
     )
+
+    # WSL2: forzar Gazebo a usar TCP en vez de shared memory para evitar
+    # "Interrupted system call" que desestabiliza el /clock
+    set_gz_ip = SetEnvironmentVariable(name='GZ_IP', value='127.0.0.1')
+    set_gz_relay = SetEnvironmentVariable(name='GZ_RELAY', value='127.0.0.1')
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -121,6 +139,7 @@ def generate_launch_description():
         executable='relay',
         name='robot_description_relay',
         arguments=['/robot/robot_description', '/robot_description'],
+        parameters=[{'use_sim_time': True}],
         output='screen',
     )
 
@@ -129,12 +148,14 @@ def generate_launch_description():
         executable='relay',
         name='tf_relay',
         arguments=['/robot/tf', '/tf'],
+        parameters=[{'use_sim_time': True}],
         output='screen',
     )
     tf_static_relay = Node(
         package='wind_tower_bringup',
         executable='tf_static_relay',
         name='tf_static_relay',
+        parameters=[{'use_sim_time': True}],
         output='screen',
     )
 
@@ -242,7 +263,21 @@ def generate_launch_description():
         package='wind_tower_bringup',
         executable='turner_node',
         name='turner_node',
+        parameters=[{'use_sim_time': True}],
         output='screen',
+    )
+
+    # Sobrescribe parámetros del EKF generado por Clearpath para tolerar
+    # el clock irregular de Gazebo en WSL2
+    ekf_param_override = TimerAction(
+        period=10.0,
+        actions=[
+            ExecuteProcess(
+                cmd=['ros2', 'param', 'set', '/robot/ekf_node',
+                     'smooth_lagged_data', 'true'],
+                output='screen',
+            ),
+        ],
     )
 
     # Bridge IMU: Gazebo → ROS2
@@ -262,28 +297,28 @@ def generate_launch_description():
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_linear.x', '0.15',
+                    'scale_linear.x', '0.50',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_angular.yaw', '0.08',
+                    'scale_angular.yaw', '0.40',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_linear_turbo.x', '0.30',
+                    'scale_linear_turbo.x', '0.90',
                 ],
                 output='screen',
             ),
             ExecuteProcess(
                 cmd=[
                     'ros2', 'param', 'set', '/robot/teleop_twist_joy_node',
-                    'scale_angular_turbo.yaw', '0.15',
+                    'scale_angular_turbo.yaw', '0.70',
                 ],
                 output='screen',
             ),
@@ -294,7 +329,10 @@ def generate_launch_description():
         declare_world_file,
         sync_robot_yaml,
         set_pythonpath,
+        set_cyclonedds_uri,
         set_gz_resource_path,
+        set_gz_ip,
+        set_gz_relay,
         gz_sim,
         clock_bridge,
         turner_cmd_bridge,
@@ -309,5 +347,6 @@ def generate_launch_description():
         turner_node,
         imu_bridge,
         robot_spawn,
+        ekf_param_override,
         inspection_teleop_limits,
     ])

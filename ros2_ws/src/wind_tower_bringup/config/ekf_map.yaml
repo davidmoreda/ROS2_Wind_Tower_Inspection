@@ -1,0 +1,70 @@
+ekf_map_node:
+  ros__parameters:
+    use_sim_time: true
+
+    frequency: 30.0
+    sensor_timeout: 0.1
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.1
+    print_diagnostics: false
+    debug: false
+
+    map_frame:       map
+    odom_frame:      odom
+    base_link_frame: base_link
+    world_frame:     map        # world_frame=map → publica TF map→odom
+
+    publish_tf: true
+    publish_acceleration: false
+
+    # Fuente 1: odometría filtrada de Clearpath EKF1 (continua, relativa)
+    # Clearpath publica platform/odom/filtered en ns /robot
+    odom0: /robot/platform/odom/filtered
+    odom0_config: [true,  true,  false,
+                   false, false, false,
+                   false, false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative:     false
+    odom0_queue_size:   10
+
+    # Fuente 2: pose absoluta publicada por AMCL (tf_broadcast: false en AMCL)
+    pose0: /amcl_pose
+    pose0_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    pose0_differential:        false
+    pose0_relative:            false
+    pose0_queue_size:          5
+    # Subido (5.0→10.0): tras un slip prolongado en rampa, AMCL puede tener
+    # que aplicar correcciones grandes (>5 m de diferencia respecto al
+    # estado del EKF). Con threshold=5.0 el EKF las rechazaba y el robot
+    # se quedaba "perdido" en RViz aunque AMCL hubiera resuelto la pose.
+    pose0_rejection_threshold: 10.0
+
+    # process_noise_covariance subido en X/Y (0.05→0.20) y vx/vy (0.025→0.10):
+    # En la rampa el wheel-odom slippea y el EKF, si confía mucho en la
+    # predicción, propaga ese error como verdad. Subiendo el ruido de proceso
+    # de pose y velocidad lineal el filtro queda "más abierto" a las
+    # correcciones de pose0 (AMCL) y no acumula deriva de la odometría
+    # cuando ésta es poco fiable.
+    process_noise_covariance: [
+      0.20, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.20, 0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.03, 0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.10,  0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.10,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
