@@ -1,0 +1,265 @@
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\title{Practica 2 -- Navegacion Autonoma con NAV2 en ROS\,2 Humble}
+\author{
+  [Nombre 1 Apellidos] -- [NIA 1] \\
+  [Nombre 2 Apellidos] -- [NIA 2] \\
+  [Nombre 3 Apellidos] -- [NIA 3] \\
+  \\
+  Master en Inteligencia Artificial -- Robotica Inteligente
+}
+\date{[Fecha de entrega]}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\section{Introduccion y objetivo}
+\label{sec:intro}
+
+% TODO: 1 parrafo.
+% - Construir el stack completo de navegacion en ROS 2 con NAV2: SLAM, EKF,
+%   AMCL, costmaps, planner y controller, validado en Gazebo sobre el Husky.
+% - Justificar uso de Husky A200 (Clearpath) por continuidad con el TFM
+%   de inspeccion de torres eolicas.
+% - Mencionar que la rama practica-2 contiene el repositorio completo del
+%   TFM y que la memoria se centra en el scope de NAV2.
+[Resumen del objetivo: integrar NAV2 sobre el Husky A200 simulado en Gazebo,
+mapear el entorno con SLAM Toolbox, fusionar IMU + odometria con un EKF,
+localizar globalmente con AMCL y completar misiones de navegacion enviando
+metas desde RViz o ejecutando waypoints predefinidos. El proyecto en el que se
+integra esta practica es la inspeccion autonoma de torres eolicas; en la rama
+\texttt{practica-2} conviven otros paquetes del TFM (brazo, percepcion,
+comportamiento) que no son objeto de evaluacion en esta entrega.]
+
+\section{Arquitectura del sistema}
+\label{sec:arquitectura}
+
+% TODO: diagrama de bloques.
+% - Gazebo -> /scan (via pointcloud_to_laserscan), /imu/data, /odom de ruedas
+% - robot_localization (EKF) -> /odometry/filtered, TF odom->base_link
+% - AMCL -> TF map->odom
+% - nav2_bringup -> planner_server (NavFn), controller_server (RPP),
+%   smoother_server, bt_navigator, behavior_server
+% - lifecycle_manager orquesta el ciclo de vida
+% - RViz para visualizar y enviar metas
+
+\fig[0.9]{architecture_diagram.png}{Arquitectura NAV2 implementada sobre el Husky simulado.}
+
+\section{Configuracion de launchers}
+\label{sec:launchers}
+
+% TODO: explicar los 4 launchers usados y por que existen separados.
+
+\begin{table}[H]
+  \centering
+  \caption{Launchers utilizados en la Practica 2.}
+  \label{tab:launchers}
+  \begin{tabularx}{\linewidth}{lX}
+    \toprule
+    Launcher & Responsabilidad \\
+    \midrule
+    \texttt{simulation.launch.py}      & Gazebo Sim + Husky (Clearpath) + bridges + tuneo CycloneDDS \\
+    \texttt{slam.launch.py}            & SLAM Toolbox (sync) + RViz con \texttt{slam.rviz} \\
+    \texttt{navigation.launch.py}      & NAV2 sin AMCL, con EKF + SLAM online \\
+    \texttt{navigation\_amcl.launch.py}& NAV2 + AMCL + mapa estatico ya generado \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% TODO: subseccion sobre buenas practicas:
+% - get_package_share_directory
+% - DeclareLaunchArgument(use_sim_time, map, params_file)
+% - lifecycle_manager con autostart=True
+% - CYCLONEDDS_URI a tools/cyclonedds.xml (sube limite DDS de 64 a 240)
+% - Relays /robot/tf -> /tf y /robot/robot_description -> /robot_description
+%   por coexistencia de namespace Clearpath con NAV2.
+
+\section{Mapeo con SLAM Toolbox}
+\label{sec:slam}
+
+% TODO:
+% - slam_params.yaml en modo sync (sync_slam_toolbox_node).
+% - Topicos consumidos: /scan, /tf, /odom.
+% - Topicos publicados: /map, /map_metadata, /pose.
+% - Conducir el robot manualmente con ps5_teleop o teleop_twist_keyboard.
+% - Guardar el mapa con map_saver_cli -> ros2_ws/maps/wind_tower.{pgm,yaml,
+%   posegraph,data}.
+% Capturas:
+% - figures/slam_in_progress.png  (RViz con mapa parcial)
+% - figures/map_final.png         (mapa guardado)
+
+\fig[0.8]{slam_in_progress.png}{Mapeo SLAM en progreso: ocupacion, escaneo LIDAR y trayectoria.}
+
+\fig[0.55]{map_final.png}{Mapa final \texttt{wind\_tower.pgm} obtenido tras el recorrido.}
+
+\section{Fusion sensorial con filtro de Kalman extendido}
+\label{sec:ekf}
+
+% TODO: explicar ekf_map.yaml:
+% - Vector de estado: [x, y, theta, vx, omega].
+% - two_d_mode: true (robot planar).
+% - odom0 y imu0 con sus matrices _config:
+%   * odom0 aporta pose (x, y, theta) y velocidades lineales.
+%   * imu0 aporta orientacion absoluta y velocidad angular.
+% - Frecuencia 30 Hz, sensor_timeout 0.1.
+% - Salida: odom -> base_link y /odometry/filtered.
+% - Mencionar el ajuste de covarianza Z (0.10 -> 0.03) para reflejar que el
+%   robot es planar.
+
+\begin{equation}
+  \mathbf{x} = \begin{bmatrix} x & y & \theta & v_x & \omega \end{bmatrix}^T
+\end{equation}
+
+\begin{equation}
+  \mathbf{x}_{k+1} = \mathbf{x}_k + \begin{bmatrix} v_k \cos\theta_k \\ v_k \sin\theta_k \\ \omega_k \\ 0 \\ 0 \end{bmatrix} \Delta t + \mathbf{w}_k
+\end{equation}
+
+\fig[0.6]{ekf_filtered_odom.png}{Comparativa entre \texttt{/odom} (sin fusion) y \texttt{/odometry/filtered} (EKF).}
+
+\section{Localizacion con AMCL}
+\label{sec:amcl}
+
+% TODO: explicar amcl_params.yaml:
+% - min_particles=500, max_particles=2000 (KLD-sampling).
+% - alpha1..alpha4: ruido del modelo de movimiento.
+% - laser_z_hit, laser_sigma_hit: modelo likelihood field.
+% - update_min_d=0.25, update_min_a=0.2.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.48\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/amcl_initial.png}
+    \caption{Inicialmente: particulas dispersas.}
+  \end{subfigure}
+  \begin{subfigure}{0.48\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/amcl_converged.png}
+    \caption{Tras varios escaneos: convergencia.}
+  \end{subfigure}
+  \caption{Distribucion de particulas AMCL antes y despues de la convergencia.}
+  \label{fig:amcl}
+\end{figure}
+
+\section{Mapas, costmaps y planner}
+\label{sec:costmaps}
+
+% TODO:
+% - global_costmap: static_layer + obstacle_layer + inflation_layer.
+% - local_costmap: rolling window, obstacle_layer + inflation_layer.
+% - Planner: NavFn (Dijkstra).
+% - Behavior tree por defecto.
+
+\fig[0.85]{costmaps_rviz.png}{Costmap global (azul) y local (rojo) sobre el mapa estatico.}
+
+\section{Tuning iterativo del controller}
+\label{sec:tuning}
+
+El controller local es \texttt{RegulatedPurePursuitController}. La rampa de 13°
+presente en el mundo nos obligo a iterar la configuracion en dos fases, y este
+proceso constituye una de las aportaciones mas relevantes de esta entrega.
+
+\paragraph{Hipotesis 1 (descartada): \emph{"mas velocidad y aceleracion para vencer la pendiente"}.}
+Subimos \texttt{desired\_linear\_vel} a 0.5\,m/s, \texttt{max\_accel} a 2.5 y
+\texttt{max\_velocity} a 0.6. El razonamiento era que el Husky debia entrar con
+momento suficiente para coronar la rampa. En la practica el robot patinaba en
+los giros sobre la rampa, AMCL perdia coherencia con el LIDAR y la odometria
+daba saltos.
+
+\paragraph{Hipotesis 2 (actual): \emph{"aceleraciones suaves para no perder traccion"}.}
+El problema dominante era traccion, no potencia. Bajamos las aceleraciones del
+\texttt{velocity\_smoother} de 2.5 a 0.75 lineal y de 1.0 a 0.8 angular, y
+suavizamos el seguimiento del path con un lookahead mas largo.
+
+\begin{table}[H]
+  \centering
+  \caption{Parametros clave del controller antes y despues del tuning.}
+  \label{tab:tuning}
+  \begin{tabularx}{\linewidth}{lXrr}
+    \toprule
+    Parametro & Motivacion del cambio & Antes & Despues \\
+    \midrule
+    \texttt{lookahead\_dist}                  & Horizonte mas largo amortigua el seguimiento (anti-bandazos) & 0.9 & 1.2 \\
+    \texttt{max\_lookahead\_dist}             & Mas margen en rectas largas       & 1.5 & 2.0 \\
+    \texttt{min\_lookahead\_dist}             & Evita carrot point muy cerca       & 0.4 & 0.6 \\
+    \texttt{rotate\_to\_heading\_angular\_vel}& Giros in-situ mas suaves           & 0.7 & 0.5 \\
+    \texttt{rotate\_to\_heading\_min\_angle}  & Menos giros in-situ innecesarios   & 45° & 60° \\
+    \texttt{max\_angular\_accel}              & Reduce jerk angular                & 2.0 & 1.2 \\
+    \texttt{velocity\_smoother.max\_accel}    & Anti-slip en rampa (lineal)        & 2.5 & 0.75 \\
+    \texttt{min\_approach\_linear\_velocity}  & Aproximacion suave sin derrape     & 0.15 & 0.06 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\paragraph{Lecciones aprendidas.}
+\begin{enumerate}
+  \item El problema en pendiente no era falta de potencia sino traccion: mas velocidad amplifica el slip.
+  \item El controlador es muy sensible al horizonte de lookahead. Valores pequenos amplifican ruido del path; valores grandes lo amortiguan.
+  \item La aceleracion del \texttt{velocity\_smoother} debe ser coherente con el resto de la cadena (smoother -> twist\_mux Clearpath -> diff-drive). Si una etapa satura, las demas no compensan.
+  \item La hipotesis equivocada inicial nos costo tiempo pero genero un dataset claro de comparacion antes/despues que se ve en las metricas.
+\end{enumerate}
+
+\fig[0.85]{nav_full_run.png}{Captura combinada Gazebo + RViz tras el tuning: trayectoria suave y AMCL estable durante la subida.}
+
+\section{Cadena TF}
+\label{sec:tf}
+
+\fig[0.75]{tf_frames.png}{Arbol TF obtenido con \texttt{ros2 run tf2\_tools view\_frames}.}
+
+% TODO: explicar map -> odom (AMCL), odom -> base_link (EKF),
+% base_link -> sensores (robot_state_publisher).
+
+\section{Pruebas y resultados cuantitativos}
+\label{sec:pruebas}
+
+% TODO: rellenar la tabla de metricas tras las pruebas.
+
+\begin{table}[H]
+  \centering
+  \caption{Metricas cuantitativas tras el tuning del controller.}
+  \label{tab:metricas}
+  \begin{tabularx}{\linewidth}{lXl}
+    \toprule
+    Metrica & Definicion & Valor \\
+    \midrule
+    Tiempo SLAM completo        & Recorrer todo el mundo                       & [pendiente] \\
+    Convergencia AMCL           & Desde "2D Pose Estimate" hasta nube compacta & [pendiente] \\
+    RMSE trayectoria            & Pose AMCL vs ground truth de Gazebo          & [pendiente] \\
+    Tasa replanificacion        & Eventos/min con obstaculo dinamico           & [pendiente] \\
+    Aborts del BT en rampa      & Antes y despues del tuning                   & [pendiente] \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Problemas encontrados y soluciones}
+\label{sec:problemas}
+
+% TODO: vinetas con problemas reales. Ejemplos plausibles:
+% - DDS slots agotados (Clearpath + NAV2 + bridges) -> CYCLONEDDS_URI con
+%   file://tools/cyclonedds.xml (sube limite de 64 a 240).
+% - LIDAR 3D Velodyne -> requiere pointcloud_to_laserscan para alimentar
+%   SLAM/AMCL en 2D.
+% - QoS incompatible en /scan -> scan_qos_bridge.
+% - Spawn y orientacion del robot mirando al sur (yaw=3.14) para entrar al tubo.
+% - Slip en rampa -> ver tuning seccion.
+
+\begin{itemize}
+  \item [Problema 1]: [descripcion y solucion].
+  \item [Problema 2]: [descripcion y solucion].
+  \item [Problema 3]: [descripcion y solucion].
+\end{itemize}
+
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+% TODO: 1 parrafo final con lo aprendido + integracion con el TFM
+% (Practicas 3 y 4 reutilizan este stack de navegacion).
+[Conclusiones breves: NAV2 funciona end-to-end sobre el Husky simulado, listo
+para integrarse con el resto del TFM. El tuning iterativo del controller deja
+clara la diferencia entre el modelo mental inicial (mas potencia) y el
+verdadero limite del sistema (traccion).]
+
+\end{document}
