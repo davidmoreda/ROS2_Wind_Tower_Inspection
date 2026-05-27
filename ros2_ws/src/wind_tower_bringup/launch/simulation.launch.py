@@ -81,6 +81,19 @@ def generate_launch_description():
         value='/usr/lib/python3/dist-packages:' + os.environ.get('PYTHONPATH', ''),
     )
 
+    # Sube el límite de participants de CycloneDDS de ~64 a 240.
+    # Sin esto, Clearpath (~22 nodos) + Nav2 (~10 nodos) + bridges agotan
+    # los slots de DDS, y los nodos que llegan tarde mueren con SIGABRT
+    # "rmw_create_node: failed to create domain". Hardcoded aquí para
+    # independencia del shell del usuario (no depende de ai-on).
+    set_cyclonedds_uri = SetEnvironmentVariable(
+        name='CYCLONEDDS_URI',
+        value='file://' + os.path.join(
+            os.path.expanduser('~'),
+            'ROS2_Wind_Tower_Inspection', 'tools', 'cyclonedds.xml',
+        ),
+    )
+
     packages_paths = [
         os.path.join(p, 'share')
         for p in os.environ.get('AMENT_PREFIX_PATH', '').split(':')
@@ -312,6 +325,7 @@ def generate_launch_description():
         declare_world_file,
         sync_robot_yaml,
         set_pythonpath,
+        set_cyclonedds_uri,
         set_gz_resource_path,
         set_gz_ip,
         set_gz_relay,

@@ -3,11 +3,18 @@ amcl:
     use_sim_time: true
 
     # ── Modelo de movimiento (differential drive) ─────────────────────────────
+    # alphaN subidos respecto a los defaults (0.2): el Husky derrapa
+    # significativamente al subir la rampa de 13° (las ruedas slippean y la
+    # odometría sobrestima la distancia recorrida). Con alphas más altos, AMCL
+    # no "cree" tanto la odometría y deja a las partículas dispersarse para
+    # que el escaneo láser fije la pose correcta cuando alcanzamos la cima.
+    # Sin esto, AMCL forzaría la pose al cálculo erróneo de wheel-odom y al
+    # corregir luego de golpe haría saltar el TF map→odom en RViz.
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
-    alpha1: 0.2   # ruido rotacional por rotación
-    alpha2: 0.2   # ruido rotacional por traslación
-    alpha3: 0.2   # ruido traslacional por traslación
-    alpha4: 0.2   # ruido traslacional por rotación
+    alpha1: 0.3   # ruido rotacional por rotación (slip lateral en derrape)
+    alpha2: 0.4   # ruido rotacional por traslación (alto: deriva en pendiente)
+    alpha3: 0.6   # ruido traslacional por traslación (MUY alto: slip directo)
+    alpha4: 0.3   # ruido traslacional por rotación
     alpha5: 0.2   # (solo skid-steer, ignorado en diff-drive)
 
     # ── Número de partículas ───────────────────────────────────────────────────
@@ -44,8 +51,12 @@ amcl:
       yaw: 0.0
 
     # ── Actualización del filtro ───────────────────────────────────────────────
-    update_min_d: 0.25         # distancia mínima (m) para actualizar partículas
-    update_min_a: 0.2          # ángulo mínimo (rad) para actualizar partículas
+    # Reducido (0.25→0.10 m): durante el slip en la rampa la odometría
+    # acumula desplazamiento ficticio. Si esperamos a 0.25 m para resamplear
+    # el filtro acumula demasiado error antes de que el laser lo corrija y
+    # cuando finalmente actualiza salta visiblemente la flecha en RViz.
+    update_min_d: 0.10
+    update_min_a: 0.15
     resample_interval: 1       # ciclos entre resamplings
 
     # ── Modelo del lidar ──────────────────────────────────────────────────────

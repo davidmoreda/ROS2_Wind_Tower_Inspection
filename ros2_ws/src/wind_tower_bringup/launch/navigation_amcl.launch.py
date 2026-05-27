@@ -44,6 +44,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    SetEnvironmentVariable,
     TimerAction,
 )
 from launch.conditions import IfCondition
@@ -54,6 +55,17 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('wind_tower_bringup')
+
+    # Sube el límite de participants de CycloneDDS (default ~64 → 240).
+    # Sin esto los nodos Nav2 mueren con SIGABRT por slots agotados al
+    # haber tantos nodos vivos (Clearpath sim + AMCL + Nav2 stack).
+    set_cyclonedds_uri = SetEnvironmentVariable(
+        name='CYCLONEDDS_URI',
+        value='file://' + os.path.join(
+            os.path.expanduser('~'),
+            'ROS2_Wind_Tower_Inspection', 'tools', 'cyclonedds.xml',
+        ),
+    )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz     = LaunchConfiguration('rviz')
@@ -170,9 +182,15 @@ def generate_launch_description():
         ],
     )
 
-    # ── Nav2 navigation (mismos nodos que en navigation.launch.py) ────────────
-    # Delay 22s: 5s adicionales para que AMCL converja antes de planificar
-    navigation = TimerAction(
+    # ── Nav2 navigation — nodos primero, lifecycle_manager después ────────────
+    # Delay 22s para los nodos: 5s tras AMCL para que esté convergido.
+    # IMPORTANTE: el lifecycle_manager va en SU PROPIO TimerAction (30s) para
+    # que los 7 nodos tengan 8s para registrar sus servicios get_state ANTES de
+    # que el manager intente activarlos. Sin esta separación, el manager puede
+    # quedar bloqueado en "Waiting for service smoother_server/get_state" si
+    # llama antes de que el smoother_server esté listo (race condition que
+    # bloquea TODA la cadena Nav2 → navigate_to_pose nunca aparece).
+    navigation_nodes = TimerAction(
         period=22.0,
         actions=[
             Node(
@@ -231,6 +249,14 @@ def generate_launch_description():
                 parameters=[nav2_params, {'use_sim_time': use_sim_time}],
                 remappings=remappings_tf + [('cmd_vel_smoothed', '/robot/cmd_vel')],
             ),
+        ],
+    )
+
+    # Lifecycle manager 8s después de los nodos → tienen tiempo de registrar
+    # sus servicios get_state antes de que el manager los busque.
+    navigation_lifecycle = TimerAction(
+        period=30.0,
+        actions=[
             Node(
                 package='nav2_lifecycle_manager',
                 executable='lifecycle_manager',
@@ -239,6 +265,10 @@ def generate_launch_description():
                 parameters=[{
                     'use_sim_time': use_sim_time,
                     'autostart': True,
+                    # bond_timeout 0.0 → no asume "node dead" si tarda en responder
+                    # al heartbeat durante carga inicial (evita re-activación en bucle).
+                    'bond_timeout': 0.0,
+                    'attempt_respawn_reconnection': False,
                     'node_names': [
                         'controller_server',
                         'smoother_server',
@@ -265,6 +295,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        set_cyclonedds_uri,
         declare_use_sim_time,
         declare_rviz,
         declare_map,
@@ -272,6 +303,7 @@ def generate_launch_description():
         ps5_teleop,
         perception,
         localization,
-        navigation,
+        navigation_nodes,
+        navigation_lifecycle,
         rviz,
     ])
