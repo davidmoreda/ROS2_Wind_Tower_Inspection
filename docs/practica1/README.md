@@ -20,6 +20,7 @@ Estructura LaTeX para la memoria de la Practica 1 (Simulacion en Gazebo + ROS 2 
 - [ ] Fase 3: experimento D1 (3 corridas).
 - [ ] Fase 4: redactar las 9 secciones de `memoria.tex`.
 - [ ] Fase 5: compilar PDF y revisar.
+- [ ] Video demo: guion completo en [`video_plan.md`](video_plan.md).
 
 **Pre-requisito tecnico:** `latexmk` y `pdflatex` no estan instalados todavia.
 Hace falta para la Fase 5:
@@ -66,7 +67,26 @@ Decisiones tomadas:
 - Formato: **LaTeX** (compilable con `latexmk`).
 - Robot: **Husky A200 (Clearpath)** en lugar del Tracer AgileX del PDF. Justificacion en la introduccion de la memoria.
 - Experimento D1: hay que correrlo desde cero.
-- Portada: placeholders genericos (`[Nombre]`, `[NIA]`, `[Fecha]`).
+- Portada: placeholders para los 3 integrantes (`[Nombre 1/2/3]`, `[NIA 1/2/3]`, `[Fecha]`).
+- Equipo: 3 personas (P1, P2, P3).
+
+### Reparto del equipo
+
+Reparto sugerido (ajustar entre vosotros):
+
+| Persona | Responsabilidad memoria                              | Escenas video                            | Rubrica       |
+| ------- | ---------------------------------------------------- | ---------------------------------------- | ------------- |
+| **P1**  | Intro + Mundo + Problemas + Checklist + Conclusiones | Intro + Mundo + Cierre                   | Mundo (20%)   |
+| **P2**  | Robot + Sensores                                     | Robot + Sensores                         | Robot (25%) + Sensores (20%) |
+| **P3**  | Integracion + D1 (scripts y plots)                   | Integracion + Teleop + D1                | Integracion (20%) + D1 (15%) |
+
+Para la **Fase 2** (capturas) y **Fase 3** (experimento D1) el reparto sigue el mismo bloque tematico:
+
+- **P1**: capturar `mundo_gazebo.png`. Anotar observaciones de spawn y estabilidad.
+- **P2**: capturar `robot_rviz.png`, `imu_echo.png`, `scan_echo.png`, `scan_rviz.png`.
+- **P3**: capturar `topic_list.png`, `odom_echo.png`, `teleop_demo.png` + correr las 3 corridas D1 + generar `d1_trajectories.png`.
+
+Cada persona redacta sus secciones en `memoria.tex` y al final se hace una revision cruzada.
 
 ### Fase 1 - Estructura LaTeX (hecha)
 
