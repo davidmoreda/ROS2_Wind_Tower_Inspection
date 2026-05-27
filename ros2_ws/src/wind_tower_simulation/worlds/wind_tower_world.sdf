@@ -2,10 +2,7 @@
 <sdf version="1.7">
   <world name="wind_tower_world">
 
-    <!-- Gravedad reducida (de -9.8 a -7.5) para compensar par limitado del Husky -->
-    <!-- subiendo la rampa de 13°. Reduce ~23% el peso aparente; la tracción sigue -->
-    <!-- siendo suficiente con mu=3.0 + slip=0 en las superficies de la rampa. -->
-    <gravity>0 0 -7.5</gravity>
+    <gravity>0 0 -9.81</gravity>
 
     <physics type="ode">
       <max_step_size>0.004</max_step_size>
@@ -14,13 +11,13 @@
       <ode>
         <solver>
           <type>quick</type>
-          <iters>50</iters>
+          <iters>100</iters>
           <sor>1.3</sor>
         </solver>
         <constraints>
           <cfm>0.0</cfm>
           <erp>0.2</erp>
-          <contact_max_correcting_vel>0.2</contact_max_correcting_vel>
+          <contact_max_correcting_vel>2.0</contact_max_correcting_vel>
           <contact_surface_layer>0.001</contact_surface_layer>
         </constraints>
       </ode>
@@ -671,7 +668,7 @@
     <!-- Cuña de entrada norte: suaviza discontinuidad 0°→13° en dos pasos -->
     <!-- Cubre Y=19.6 a 20.0 con inclinación media (6.5°, roll=-0.115 rad)  -->
     <!-- z_c=-0.056: cierra gap <1mm con cuerpo principal en Y=19.6 -->
-    <!-- Fricción mu=3.0 (antes 1.5) + slip nulo para reducir el patinaje -->
+    <!-- Fricción mu=5.0 + slip nulo para reducir el patinaje -->
     <!-- al pasar por la transición de pendiente. -->
     <model name="ramp_north_entry">
       <static>true</static>
@@ -682,8 +679,8 @@
           <surface>
             <friction>
               <ode>
-                <mu>3.0</mu>
-                <mu2>3.0</mu2>
+                <mu>5.0</mu>
+                <mu2>5.0</mu2>
                 <slip1>0.0</slip1>
                 <slip2>0.0</slip2>
               </ode>
@@ -707,8 +704,8 @@
     <!-- Cuerpo principal de la rampa norte (Y=15 a Y=19.6) -->
     <!-- Termina EXACTAMENTE en Y=15 (borde tubo), sin meterse dentro     -->
     <!-- z_c=0.497 → entrada Y=19.6 a z=0.046m, tubo Y=15 a z=1.094m    -->
-    <!-- Fricción mu=3.0 (antes 1.5) + slip1/slip2 = 0 + max_vel=0.1: -->
-    <!-- triplica el coeficiente de fricción Coulomb y reduce el slip ODE -->
+    <!-- Fricción mu=5.0 + slip1/slip2 = 0 + max_vel=0.1: -->
+    <!-- aumenta el coeficiente de fricción Coulomb y reduce el slip ODE -->
     <!-- para que las ruedas del Husky agarren con par limitado en 13°. -->
     <!-- min_depth bajado (0.002→0.001) → contacto menos hundido → patch -->
     <!-- de contacto más realista y mayor presión normal efectiva. -->
@@ -721,8 +718,8 @@
           <surface>
             <friction>
               <ode>
-                <mu>3.0</mu>
-                <mu2>3.0</mu2>
+                <mu>5.0</mu>
+                <mu2>5.0</mu2>
                 <slip1>0.0</slip1>
                 <slip2>0.0</slip2>
               </ode>
@@ -752,7 +749,7 @@
          Reemplaza ramp_junction + ramp_small_south anteriores:
          elimina escalón de 20 mm en Y=15.08 que bloqueaba al Husky.
          La unión con ramp_north queda a z=1.094 sin discontinuidad.
-         Ancho 4 m, grosor 0.15 m, mu=1.5 (max agarre).
+         Ancho 4 m, grosor 0.15 m, mu=5.0 (alto agarre).
          ══════════════════════════════════════════════ -->
 
     <model name="ramp_inner">
@@ -764,8 +761,8 @@
           <surface>
             <friction>
               <ode>
-                <mu>3.0</mu>
-                <mu2>3.0</mu2>
+                <mu>5.0</mu>
+                <mu2>5.0</mu2>
                 <slip1>0.0</slip1>
                 <slip2>0.0</slip2>
               </ode>

@@ -294,6 +294,29 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    # ── Behaviour nodes (mission controller + voice) ───────────────────────
+    # Se lanzan 35 s después para que Nav2 lifecycle esté activo antes de que
+    # mission_controller intente conectarse al action server de Nav2.
+    behaviour_nodes = TimerAction(
+        period=35.0,
+        actions=[
+            Node(
+                package='wind_tower_inspection_behaviour',
+                executable='mission_controller',
+                name='mission_controller',
+                output='screen',
+                parameters=[{'use_sim_time': use_sim_time}],
+            ),
+            Node(
+                package='wind_tower_inspection_behaviour',
+                executable='voice_command_node',
+                name='voice_command_node',
+                output='screen',
+                parameters=[{'use_sim_time': use_sim_time}],
+            ),
+        ],
+    )
+
     return LaunchDescription([
         set_cyclonedds_uri,
         declare_use_sim_time,
@@ -305,5 +328,6 @@ def generate_launch_description():
         localization,
         navigation_nodes,
         navigation_lifecycle,
+        behaviour_nodes,
         rviz,
     ])
