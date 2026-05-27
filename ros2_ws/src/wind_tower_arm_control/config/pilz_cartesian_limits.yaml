@@ -1,0 +1,11 @@
+# Cartesian limits for the Pilz Industrial Motion Planner.
+#
+# Pilz is not the default pipeline (OMPL is), but having these limits lets you
+# add Pilz later for straight-line (LIN) camera moves during the sweep and the
+# defect close-up, where a predictable Cartesian path matters more than a fast
+# joint-space one.
+cartesian_limits:
+  max_trans_vel: 0.30
+  max_trans_acc: 0.60
+  max_trans_dec: -0.60
+  max_rot_vel: 1.00

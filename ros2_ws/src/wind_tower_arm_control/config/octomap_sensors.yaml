@@ -1,0 +1,26 @@
+# 3-D sensor config for MoveIt's occupancy_map_monitor (octomap).
+#
+# Loaded as a parameter file by move_group directly (NOT via
+# MoveItConfigsBuilder.sensors_3d(), which in MoveIt 2 Jazzy emits a
+# list-of-dicts structure that ROS 2 parameters cannot represent —
+# producing "Failed to handle type ..." at launch).
+#
+# The ROS 2-friendly "named sensor" format is: a string array `sensors` with
+# the IDs, and one parameter block per ID with the plugin config.
+#
+# The /** wildcard makes these params apply to any node that loads this
+# file, regardless of namespace.
+
+/**:
+  ros__parameters:
+    sensors: ["velodyne_lidar3d_0"]
+
+    velodyne_lidar3d_0:
+      sensor_plugin: occupancy_map_monitor/PointCloudOctomapUpdater
+      point_cloud_topic: /velodyne_points
+      max_range: 5.0           # ignore returns beyond 5 m
+      point_subsample: 1       # use every point
+      padding_offset: 0.1      # 10 cm self-filter pad around robot links
+      padding_scale: 1.0
+      max_update_rate: 1.0     # 1 Hz updates; cheap on CPU
+      filtered_cloud_topic: octomap_filtered_cloud
