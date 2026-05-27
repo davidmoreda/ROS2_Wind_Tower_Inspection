@@ -1,0 +1,19 @@
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+*.lof
+*.lot
+*.snm
+*.nav
+*.vrb
+*.run.xml
+
+# Videos grandes (suben con git-lfs o por enlace externo)
+video/*.mp4
+video/*.mov

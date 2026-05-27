@@ -1,0 +1,310 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+\input{preamble}
+
+% ── Datos de la presentacion ──────────────────────────────────────────────────
+\title{Inspeccion Autonoma de Torres Eolicas}
+\subtitle{Husky + UR5e + NAV2 + MoveIt 2 + YOLO + Behaviour Tree}
+\author[Equipo P1 P2 P3]{%
+  [Nombre 1 Apellidos] \and
+  [Nombre 2 Apellidos] \and
+  [Nombre 3 Apellidos]
+}
+\institute[Loyola]{Universidad Loyola Andalucia \\ Master en Inteligencia Artificial \\ Robotica Inteligente}
+\date{[Fecha de la presentacion]}
+
+% Logo en portada y esquina (subir a figures/logo_loyola.png).
+% Si no existe el archivo, comenta estas dos lineas.
+\titlegraphic{\includegraphics[height=1.5cm]{figures/logo_loyola.png}}
+\logo{\includegraphics[height=0.8cm]{figures/logo_loyola.png}}
+
+\begin{document}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 1. PORTADA
+% ───────────────────────────────────────────────────────────────────────────
+{\setbeamertemplate{footline}{}
+\begin{frame}[plain]
+  \titlepage
+\end{frame}}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 2. INDICE
+% ───────────────────────────────────────────────────────────────────────────
+\begin{frame}{Indice}
+  \tableofcontents[hideallsubsections]
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 3. CONTEXTO Y OBJETIVO  [P1]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Contexto y objetivo}
+
+\begin{frame}{Contexto y objetivo del proyecto}
+  % TODO P1: por que la inspeccion autonoma de torres eolicas
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item Las turbinas eolicas operan en condiciones extremas y requieren \highlight{inspeccion periodica} de defectos en las palas y la torre.
+        \item Hoy la inspeccion la hace personal en altura con drones y camaras manuales.
+        \item Nuestra propuesta: un \highlight{robot terrestre con brazo manipulador} que inspecciona desde dentro del tubo de la torre.
+      \end{itemize}
+      \vspace{0.5em}
+      \textbf{Objetivo:} integrar navegacion autonoma, manipulacion, percepcion y comportamiento en un unico sistema simulado en Gazebo.
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{contexto_torre.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 4. ARQUITECTURA  [P1]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Arquitectura del sistema}
+
+\begin{frame}{Arquitectura general}
+  % TODO P1: diagrama de bloques (figuras/arquitectura.png)
+  \fig[0.9\textwidth]{arquitectura.png}
+  \vspace{-0.5em}
+  \begin{block}{}
+    Cuatro capas: \highlight{simulacion} (Gazebo), \highlight{estimacion} (EKF + AMCL), \highlight{actuacion} (NAV2 + MoveIt 2) y \highlight{logica} (BT + voz + YOLO).
+  \end{block}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 5. PLATAFORMA  [P2]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Plataforma robotica y simulacion}
+
+\begin{frame}{Husky + UR5e + sensores en Gazebo}
+  % TODO P2: presentar el robot.
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item \highlight{Husky A200} de Clearpath (base diferencial).
+        \item \highlight{UR5e} montado encima (brazo 6 DOF).
+        \item Sensores: IMU phidgets, LIDAR 2D Hokuyo, \highlight{LIDAR 3D Velodyne VLP-16}, camara de inspeccion en el TCP.
+        \item Configuracion declarativa en \texttt{robot.yaml} (Clearpath).
+      \end{itemize}
+      \vspace{0.5em}
+      Mundo: nave industrial con un tramo de torre eolica.
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{robot_gazebo.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 6. NAV2  [P2]  -- 2 slides
+% ───────────────────────────────────────────────────────────────────────────
+\section{Navegacion autonoma (NAV2)}
+
+\begin{frame}{Stack de navegacion: SLAM + EKF + AMCL}
+  % TODO P2: explicar el stack
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item \highlight{SLAM Toolbox} para mapeo offline del entorno.
+        \item \highlight{EKF} (\texttt{robot\_localization}) fusiona IMU + odometria $\to$ TF \texttt{odom -> base\_link}.
+        \item \highlight{AMCL} localiza globalmente sobre el mapa $\to$ TF \texttt{map -> odom}.
+        \item \texttt{nav2\_bringup} orquesta planner (NavFn), controller (RPP), BT navigator y recovery.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{nav2_rviz.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Tuning del controller: rampa de 13°}
+  % TODO P2: contar la historia del tuning (rampa, anti-bandazos, slip).
+  \begin{block}{Hipotesis 1 (descartada)}
+    \emph{"Mas velocidad y aceleracion para vencer la pendiente."} El Husky patinaba en los giros, AMCL perdia coherencia.
+  \end{block}
+  \begin{block}{Hipotesis 2 (actual)}
+    \emph{"Aceleraciones suaves para no perder traccion."}
+  \end{block}
+  \scriptsize
+  \begin{tabular}{lrr}
+    \toprule
+    Parametro & Antes & Despues \\
+    \midrule
+    \texttt{lookahead\_dist}        & 0.9  & \textbf{1.2}  \\
+    \texttt{max\_angular\_accel}    & 2.0  & \textbf{1.2}  \\
+    \texttt{smoother.max\_accel}    & 2.5  & \textbf{0.75} \\
+    \texttt{rotate\_to\_heading\_min\_angle} & 45° & \textbf{60°} \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 7. MOVEIT  [P3]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Manipulacion con MoveIt 2}
+
+\begin{frame}{MoveIt 2 sobre el UR5e}
+  % TODO P3: MoveIt con UR5e.
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item URDF/Xacro generado por Clearpath; SRDF con grupo \texttt{manipulator}.
+        \item Configuracion: \texttt{kinematics.yaml}, \texttt{joint\_limits.yaml}, \texttt{ompl\_planning.yaml}, \texttt{pilz\_cartesian\_limits.yaml}.
+        \item Planificacion \highlight{articular} con OMPL (RRTConnect).
+        \item Planificacion \highlight{cartesiana} con Pilz LIN para inspeccion lineal del TCP.
+        \item Controlador \texttt{JointTrajectory} via \texttt{ros2\_control}.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{moveit_rviz.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 8. PERCEPCION YOLO  [P3]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Percepcion: YOLO y dataset sintetico}
+
+\begin{frame}{Deteccion de defectos con YOLO}
+  % TODO P3: YOLO + dataset
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item Dataset \highlight{sintetico} generado desde Gazebo: capturas de torre con defectos artificiales.
+        \item Etiquetado en Roboflow $\to$ entrenamiento YOLOv8.
+        \item Nodo \texttt{detector\_node} consume \texttt{/inspection/camera/image\_raw} y publica detecciones.
+        \item \texttt{defect\_mapper\_node} proyecta los defectos al mapa cilindrico de la torre.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{yolo_detection.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 9. COMPORTAMIENTO  [P3]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Comportamiento e interaccion}
+
+\begin{frame}{Behaviour Tree + voz + mission controller}
+  % TODO P3: BT + voz + langchain.
+  \begin{columns}
+    \begin{column}{0.55\textwidth}
+      \begin{itemize}
+        \item \highlight{BT de inspeccion}: secuencia \emph{navegar $\to$ entrar al tubo $\to$ desplegar brazo $\to$ inspeccionar $\to$ generar informe}.
+        \item \highlight{Voz con Whisper}: el operador da ordenes en lenguaje natural.
+        \item \highlight{LangChain}: traduce comandos como \emph{"inspecciona la torre"} a acciones del BT.
+        \item \texttt{mission\_controller}: orquesta NAV2, MoveIt y percepcion en una unica mision.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \fig[\textwidth]{bt_voice.png}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 10-11. DEMO  [todos]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Demo}
+
+\begin{frame}{Demo: mision completa de inspeccion}
+  % TODO: embeber el video o enlazarlo.
+  % Opcion 1 (video embebido en el PDF):
+  %   \movie[width=10cm,height=6cm,autostart,showcontrols]{}{video/demo.mp4}
+  % Opcion 2 (captura + enlace):
+  %   \fig[0.7\textwidth]{demo_thumbnail.png}
+  %   \href{video/demo.mp4}{[Reproducir video de la demo]}
+  \begin{center}
+    \fig[0.75\textwidth]{demo_thumbnail.png}
+    \vspace{-0.5em}
+    {\small Pulsa para reproducir: \href{run:video/demo.mp4}{\texttt{video/demo.mp4}}}
+  \end{center}
+\end{frame}
+
+\begin{frame}{Demo: estructura del video}
+  % TODO: tabla con la timeline del video.
+  \scriptsize
+  \begin{tabular}{lll}
+    \toprule
+    Tiempo & Que se ve & Narra \\
+    \midrule
+    0:00 - 0:30 & Lanzamiento Gazebo + spawn Husky                         & P1 \\
+    0:30 - 1:00 & Comando por voz \emph{"inspecciona la torre"}            & P3 \\
+    1:00 - 2:00 & Husky navega autonomamente hacia la torre (Nav2 + AMCL)   & P2 \\
+    2:00 - 3:00 & Entrada al tubo, despliegue del brazo, inspeccion        & P3 \\
+    3:00 - 4:00 & Deteccion YOLO + mapa cilindrico de defectos              & P3 \\
+    4:00 - 4:30 & Informe final generado y mision completada                 & P1 \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 12. RESULTADOS  [P2]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Resultados}
+
+\begin{frame}{Metricas cuantitativas}
+  % TODO P2: rellenar tras las pruebas.
+  \scriptsize
+  \begin{tabular}{lXc}
+    \toprule
+    Metrica & Definicion & Valor \\
+    \midrule
+    Tiempo SLAM completo            & Recorrido del mundo                 & [pendiente] \\
+    Convergencia AMCL               & Desde "2D Pose Estimate"            & [pendiente] \\
+    RMSE trayectoria                & AMCL vs ground truth                & [pendiente] \\
+    Tasa de replanificacion         & Eventos/min con obstaculo dinamico  & [pendiente] \\
+    Aborts del BT en rampa          & Antes vs despues del tuning         & [pendiente] \\
+    Tiempo mision completa          & Inspeccion end-to-end               & [pendiente] \\
+    Defectos detectados (precision) & YOLO @ IoU 0.5                       & [pendiente] \\
+    \bottomrule
+  \end{tabular}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 13. CONCLUSIONES  [P1]
+% ───────────────────────────────────────────────────────────────────────────
+\section{Conclusiones}
+
+\begin{frame}{Conclusiones y trabajo futuro}
+  \begin{block}{Lo que hemos demostrado}
+    \begin{itemize}
+      \item Integracion end-to-end de \highlight{navegacion + manipulacion + percepcion + comportamiento} en ROS 2.
+      \item Mision autonoma disparada por \highlight{voz en lenguaje natural}.
+      \item Tuning realista del controller NAV2 en pendiente.
+    \end{itemize}
+  \end{block}
+  \begin{block}{Trabajo futuro}
+    \begin{itemize}
+      \item Llevar el sistema al robot real.
+      \item Loop closure en SLAM para entornos mas grandes.
+      \item Reentrenar YOLO con dataset real de torres.
+    \end{itemize}
+  \end{block}
+\end{frame}
+
+% ───────────────────────────────────────────────────────────────────────────
+% 14. PREGUNTAS
+% ───────────────────────────────────────────────────────────────────────────
+\section*{Preguntas}
+
+{\setbeamertemplate{footline}{}
+\begin{frame}[plain]
+  \begin{center}
+    \vspace{1.5cm}
+    {\Huge \textcolor{loyolaGranate}{\textbf{?Preguntas?}}}
+    \vspace{1cm}
+
+    {\large Gracias por vuestra atencion}
+
+    \vspace{1.5cm}
+    \small
+    \faIcon{github}~~\texttt{github.com/davidmoreda/ROS2\_Wind\_Tower\_Inspection} \\
+    \faIcon{envelope}~~[email del equipo]
+  \end{center}
+\end{frame}}
+
+\end{document}

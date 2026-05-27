@@ -1,0 +1,99 @@
+% Preambulo Beamer para la presentacion del TFM.
+% Tema custom Loyola Andalucia (rojo granate + grises).
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{fontawesome5}
+\usepackage{tikz}
+\usepackage{multimedia}   % para embeber video
+
+% ── Colores corporativos Loyola ───────────────────────────────────────────────
+\definecolor{loyolaGranate}{HTML}{9F1D35}
+\definecolor{loyolaGrisFuerte}{HTML}{3F3F3F}
+\definecolor{loyolaGrisSuave}{HTML}{E5E5E5}
+\definecolor{loyolaAcento}{HTML}{C99E6A}
+
+% ── Tema Beamer ───────────────────────────────────────────────────────────────
+\usetheme{default}
+\usefonttheme{professionalfonts}
+\useinnertheme{rounded}
+\useoutertheme{infolines}
+
+\setbeamercolor{structure}{fg=loyolaGranate}
+\setbeamercolor{title}{fg=loyolaGranate}
+\setbeamercolor{subtitle}{fg=loyolaGrisFuerte}
+\setbeamercolor{frametitle}{fg=white,bg=loyolaGranate}
+\setbeamercolor{author}{fg=loyolaGrisFuerte}
+\setbeamercolor{institute}{fg=loyolaGrisFuerte}
+\setbeamercolor{date}{fg=loyolaGrisFuerte}
+\setbeamercolor{block title}{fg=white,bg=loyolaGranate}
+\setbeamercolor{block body}{bg=loyolaGrisSuave}
+\setbeamercolor{itemize item}{fg=loyolaGranate}
+\setbeamercolor{itemize subitem}{fg=loyolaGranate}
+\setbeamercolor{enumerate item}{fg=loyolaGranate}
+\setbeamercolor{section in toc}{fg=loyolaGrisFuerte}
+\setbeamercolor{footline}{fg=white,bg=loyolaGranate}
+
+\setbeamerfont{frametitle}{series=\bfseries,size=\large}
+\setbeamerfont{title}{series=\bfseries,size=\huge}
+\setbeamerfont{footline}{size=\tiny}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize item}[circle]
+\setbeamertemplate{itemize subitem}[triangle]
+
+% Footline con logo y numero de pagina.
+\setbeamertemplate{footline}{%
+  \leavevmode%
+  \hbox{%
+    \begin{beamercolorbox}[wd=.4\paperwidth,ht=2.5ex,dp=1ex,leftskip=1ex]{footline}%
+      TFM -- Inspeccion de torres eolicas
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.4\paperwidth,ht=2.5ex,dp=1ex,center]{footline}%
+      Master en Robotica Inteligente
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.2\paperwidth,ht=2.5ex,dp=1ex,rightskip=1ex,right]{footline}%
+      \insertframenumber{} / \inserttotalframenumber\hspace*{2ex}
+    \end{beamercolorbox}%
+  }%
+}
+
+% ── Estilos de codigo ─────────────────────────────────────────────────────────
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codekw}{RGB}{0,90,140}
+\definecolor{codestr}{RGB}{160,40,40}
+\definecolor{codecmt}{RGB}{90,120,90}
+\lstdefinestyle{compact}{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\color{codekw}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecmt}\itshape,
+  breaklines=true,
+  showstringspaces=false,
+  frame=single,
+  framerule=0pt,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=4pt,
+  belowskip=4pt,
+}
+\lstset{style=compact}
+
+% ── Bloques de "highlight" (lo dicho oralmente) ───────────────────────────────
+\setbeamertemplate{blocks}[rounded][shadow=true]
+
+% ── Atajos ───────────────────────────────────────────────────────────────────
+\newcommand{\fig}[2][0.7\textwidth]{%
+  \begin{center}
+    \includegraphics[width=#1]{figures/#2}
+  \end{center}
+}
+\newcommand{\highlight}[1]{\textcolor{loyolaGranate}{\textbf{#1}}}
