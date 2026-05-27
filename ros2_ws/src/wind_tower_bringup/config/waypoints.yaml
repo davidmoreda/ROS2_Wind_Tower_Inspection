@@ -1,0 +1,79 @@
+# ── Waypoints del entorno — coordenadas reales del mapa SLAM ──────────────────
+#
+# Verificadas con RViz "Publish Point" → ros2 topic echo /clicked_point
+# YAW: 0.0=Este  1.5708=Norte  3.1416=Oeste  -1.5708=Sur
+#
+# via_points: puntos intermedios obligatorios para rutas con separadores.
+# ──────────────────────────────────────────────────────────────────────────────
+
+waypoints:
+
+  # ── Destinos principales ────────────────────────────────────────────────────
+
+  charging_station:
+    description: "Estacion de carga — habitacion norte"
+    x: -0.016
+    y: -1.957
+    yaw: 1.5708
+    via_points: []   # zona sur abierta, Nav2 llega directo
+
+  home_inspection:
+    description: "Home de inspeccion — base de la rampa"
+    x: -0.026
+    y: 4.5
+    yaw: 1.5708
+    via_points: []   # en la zona de puertas, acceso directo
+
+  maintenance_station:
+    description: "Mantenimiento — sala de control"
+    x: 1.084
+    y: 52.708
+    yaw: 1.5708
+    # La ruta a mantenimiento pasa por gate_right + post_gate (gestionado
+    # programaticamente en MissionController._nav_via_gate).
+    # via_points aqui son los tramos DENTRO de la zona norte tras el gate:
+    via_points:
+      - {x: 1.0, y: 50.0}   # aproximacion a la puerta de la sala
+
+  # ── Tramo de inspeccion ────────────────────────────────────────────────────
+  # Estos dos definen el extremo inicio y fin del tubo.
+  # Los waypoints intermedios se generan automaticamente en MissionController
+  # con separacion INSP_STEP (1 m por defecto).
+
+  ramp_top:
+    description: "Cima de la rampa — punto de entrada al tubo"
+    x: 0.160
+    y: 6.901
+    yaw: 1.5708
+    via_points: []
+
+  inicio_tramo:
+    description: "Extremo sur del tubo — inicio inspeccion"
+    x: 0.245
+    y: 10.246
+    yaw: 1.5708    # mirando al norte (a lo largo del tubo)
+    via_points: []
+
+  fin_tramo:
+    description: "Extremo norte del tubo — fin inspeccion"
+    x: 0.245
+    y: 39.579
+    yaw: 1.5708
+    via_points: []
+
+  # ── Puertas / gates ────────────────────────────────────────────────────────
+  # Puntos de paso obligatorio para entrar en la zona del tubo.
+
+  gate_right:
+    description: "Puerta lateral derecha (X=+12)"
+    x: 12.015
+    y: 5.035
+    yaw: 1.5708
+    via_points: []
+
+  gate_left:
+    description: "Puerta lateral izquierda (X=-12)"
+    x: -12.078
+    y: 5.698
+    yaw: 1.5708
+    via_points: []

@@ -1,0 +1,274 @@
+# ── BT Navigator ─────────────────────────────────────────────────────────────
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /robot/platform/odom/filtered
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    # TwistStamped porque Clearpath twist_mux tiene use_stamped: true
+    enable_stamped_cmd_vel: true
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+# ── Controller Server (Regulated Pure Pursuit) ───────────────────────────────
+# RAMP-AWARE TUNING:
+#   La rampa norte tiene ~13° de pendiente. El límite principal observado es
+#   tracción, no potencia: si el robot acelera o frena fuerte, patina y AMCL/odom
+#   pierden coherencia. Priorizamos velocidad baja, aceleración suave y tiempos
+#   de progreso más amplios para subir sin cortar la referencia.
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 20.0
+    costmap_update_timeout: 0.30
+    # Umbral mínimo subido: por debajo de 0.05 m/s la rueda no rompe la fricción
+    # estática en la rampa y el robot se queda atascado mandando comandos diminutos
+    min_x_velocity_threshold: 0.05
+    min_y_velocity_threshold: 0.5        # diff-drive: Y siempre 0, threshold alto es seguro
+    min_theta_velocity_threshold: 0.001
+    # Ampliado: un slip momentáneo en la rampa NO debe abortar el BT
+    failure_tolerance: 1.0
+    # Nav2 controller → velocity_smoother (cadena estándar Nav2)
+    # El smoother publica en cmd_vel_out_topic → twist_mux /robot/cmd_vel
+    # TwistStamped porque Clearpath twist_mux tiene use_stamped: true
+    enable_stamped_cmd_vel: true
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # Reducido para detectar progreso real sobre la rampa (el robot avanza
+      # despacio pero avanza). Sin esto el progress_checker dispara antes de
+      # que coronemos la pendiente.
+      required_movement_radius: 0.15
+      movement_time_allowance: 30.0     # ampliado: rampa larga + posible slip
+
+    general_goal_checker:
+      stateful: true
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 0.15
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.50          # subido 0.25→0.50: más error de vel → diff-drive aplica más par para superar pendiente
+      # ANTI-BANDAZOS: lookahead más largo → el carrot point queda lejos y las
+      # oscilaciones del path generan correcciones angulares más suaves.
+      lookahead_dist: 1.2               # era 0.9 → subido para suavizar seguimiento
+      min_lookahead_dist: 0.6           # era 0.4 → evita carrot muy cerca que amplifica ruido
+      max_lookahead_dist: 2.0           # era 1.5 → da más margen en rectas largas
+      lookahead_time: 1.5
+      # Velocidad angular de giro in-situ más baja → transiciones más suaves
+      rotate_to_heading_angular_vel: 0.5  # era 0.7
+      # Aumentado: el TF map→odom se retrasa ligeramente cuando el robot
+      # cabecea sobre la rampa; toleramos hasta 1 s para no abortar.
+      transform_tolerance: 1.0
+      use_velocity_scaled_lookahead_dist: true
+      # Aproximacion lenta: evita patinar al frenar en la transicion superior.
+      min_approach_linear_velocity: 0.06
+      approach_velocity_scaling_dist: 0.9
+      use_collision_detection: false
+      max_allowed_time_to_collision_up_to_carrot: 1.2
+      # Mantenemos el regulador activo pero con límites más permisivos en
+      # curvatura para que no frene en mitad de la rampa cuando el plan
+      # tiene pequeñas oscilaciones por el cabeceo del robot.
+      use_regulated_linear_velocity_scaling: true
+      use_fixed_curvature_lookahead: false
+      curvature_lookahead_dist: 1.2        # consistente con lookahead_dist actualizado
+      use_cost_regulated_linear_velocity_scaling: false  # desactivado: ya no frena por coste de pared
+      regulated_linear_scaling_min_radius: 0.9   # era 0.6 → menos frenada en curvas (bandazos al acelerar tras curva)
+      regulated_linear_scaling_min_speed: 0.08   # permite subir muy despacio sin derrapar
+      # ANTI-BANDAZOS: ángulo umbral más alto → no activa giro in-situ para
+      # desviaciones pequeñas (el modo tracking puro aplica corrección más suave).
+      use_rotate_to_heading: true
+      allow_reversing: false
+      rotate_to_heading_min_angle: 1.05   # era 0.785 (45°) → ahora 60°: menos giros in-situ innecesarios
+      # ANTI-BANDAZOS: aceleración angular reducida → los cambios de w son más suaves
+      max_angular_accel: 1.2             # era 2.0 → reduce jerk angular brusco
+      max_robot_pose_search_dist: 10.0
+
+# ── Smoother Server ───────────────────────────────────────────────────────────
+smoother_server:
+  ros__parameters:
+    use_sim_time: true
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: true
+
+# ── Planner Server (NavFn / Dijkstra) ────────────────────────────────────────
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 20.0
+    costmap_update_timeout: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+# ── Behavior Server ───────────────────────────────────────────────────────────
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_link
+    transform_tolerance: 0.5
+    simulate_ahead_time: 1.0        # reducido: 2.0s era demasiado restrictivo para spin
+    max_rotational_vel: 1.0         # aumentado: llegar a 1.57 rad antes del timeout
+    min_rotational_vel: 0.2
+    rotational_acc_lim: 2.0
+
+# ── Velocity Smoother ─────────────────────────────────────────────────────────
+# Cadena de cmd_vel en Nav2:
+#   controller_server → cmd_vel_smoothed → velocity_smoother → /robot/cmd_vel
+# Clearpath twist_mux (use_stamped: True) escucha en /robot/cmd_vel (externo).
+# Usamos TwistStamped porque twist_mux de Clearpath tiene use_stamped: true.
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 20.0
+    # scale_velocities=true mantiene la proporción v/w cuando alguna componente
+    # se satura: evita que el robot pierda dirección mientras intenta acelerar.
+    scale_velocities: true
+    # OPEN_LOOP: el smoother no espera feedback del wheel-odom para acelerar.
+    # En la rampa el wheel-odom se vuelve poco fiable por el slip; CLOSED_LOOP
+    # haría que el smoother "no creyera" que ya estamos a velocidad y mandaría
+    # rampas extra al motor. Mejor mandar la rampa abierta y dejar que Nav2
+    # detecte fallo si no se mueve.
+    feedback: "OPEN_LOOP"
+    # Limites conservadores para rampa: menos pico de velocidad y aceleraciones
+    # suaves reducen slip y evitan saltos bruscos en odometria/AMCL.
+    max_velocity: [0.60, 0.0, 0.9]
+    min_velocity: [-0.60, 0.0, -0.9]
+    max_accel: [0.75, 0.0, 0.8]    # angular: era 1.0 → reducido para suavizar w
+    max_decel: [-0.75, 0.0, -0.8]  # angular: era -1.0 → simétrico
+    odom_topic: /robot/platform/odom/filtered
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+    # TwistStamped porque Clearpath twist_mux tiene use_stamped: true
+    enable_stamped_cmd_vel: true
+    # NOTA: los topics se controlan mediante remaps en el launch file:
+    #   SUB cmd_vel  (salida del controller_server, sin remap)
+    #   PUB cmd_vel_smoothed → remapeado a /robot/cmd_vel (slot external twist_mux)
+
+# ── Waypoint Follower ─────────────────────────────────────────────────────────
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: true
+    loop_rate: 20
+    stop_on_failure: false
+    action_server_result_timeout: 900.0
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: true
+      waypoint_pause_duration: 200
+
+# ── Local Costmap ─────────────────────────────────────────────────────────────
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_link
+      rolling_window: true
+      width:  5
+      height: 5
+      resolution: 0.05
+      # Husky A200: 0.99 × 0.67 m — polígono rectangular
+      footprint: "[[0.50, 0.34],[0.50, -0.34],[-0.50, -0.34],[-0.50, 0.34]]"
+      footprint_padding: 0.02
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          raytrace_max_range: 4.0       # reducido: ventana rolling 5m, borra a 4m
+          raytrace_min_range: 0.12
+          obstacle_max_range: 3.5       # reducido: marca obstáculos cercanos reales
+          obstacle_min_range: 0.12
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0       # caída rápida → banda costosa estrecha, robot pasa cerca
+        inflation_radius: 0.45         # justo sobre radio inscrito Husky (~0.44m)
+      always_send_full_costmap: true
+
+# ── Global Costmap ─────────────────────────────────────────────────────────────
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      resolution: 0.05
+      # Nave 40×60m — dimensiones explícitas para cubrir el entorno completo.
+      # Con static_layer de SLAM el mapa crece dinámicamente; estos valores
+      # son el mínimo garantizado antes de que el static layer lo amplíe.
+      width: 200
+      height: 200
+      track_unknown_space: true
+      footprint: "[[0.50, 0.34],[0.50, -0.34],[-0.50, -0.34],[-0.50, 0.34]]"
+      footprint_padding: 0.02
+      # SIN obstacle_layer en el global_costmap: el planner usa SOLO el mapa
+      # guardado por SLAM (static_layer). El LiDAR ve la rampa norte como
+      # pared (entra en el slice 0.55-0.85m del laserscan cuando se aproxima)
+      # y eso bloqueaba la trayectoria global. El obstacle_layer sigue activo
+      # en el LOCAL costmap → si aparece un obstáculo nuevo, el controller lo
+      # esquiva localmente. Para detectar obstáculos no mapeados, re-mapea con
+      # slam.launch.py y guarda el mapa de nuevo.
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 5.0       # caída rápida → banda costosa estrecha, robot pasa cerca
+        inflation_radius: 0.45         # justo sobre radio inscrito Husky (~0.44m)
+      always_send_full_costmap: true
+
+# NOTA: lifecycle_manager_navigation NO se define aquí porque navigation_launch.py
+# de nav2_bringup ya crea su propio lifecycle manager con autostart=true.
+# Definirlo aquí también causaría dos managers compitiendo y los nodos nunca
+# llegarían a estado Active (action server navigate_to_pose no se registraría).

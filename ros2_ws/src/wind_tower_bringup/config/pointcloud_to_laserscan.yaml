@@ -1,0 +1,26 @@
+pointcloud_to_laserscan_node:
+  ros__parameters:
+    # Transforma la nube al frame base antes de filtrar altura
+    target_frame: base_link
+    transform_tolerance: 0.5
+
+    # Slice horizontal: 0.55–0.85 m sobre base_link
+    # 0.55 (subido desde 0.45): cuando el robot cabecea 13° en la rampa, el
+    # frame base_link gira con él y un punto a 1 m por delante sobre la propia
+    # rampa cae a sin(13°)*1 ≈ 0.22 m bajo el plano horizontal de base_link.
+    # Con min_height=0.45 sólo bastaban ~25 cm de margen; subiendo a 0.55 m
+    # añadimos otros 10 cm y evitamos que la rampa se cuele como obstáculo
+    # mientras el Husky la sube.
+    # Las barreras (1.2 m) y los viradores (0.8 m) siguen estando dentro de
+    # la franja vertical y se detectan correctamente.
+    min_height:  0.55
+    max_height:  0.85
+
+    angle_min: -3.14159265
+    angle_max:  3.14159265
+    angle_increment: 0.008726646   # 0.5 grados
+    scan_time: 0.1                  # 10 Hz — coincide con VLP-16
+    range_min: 0.5
+    range_max: 25.0
+    use_inf: true
+    inf_epsilon: 1.0
