@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain id="any">
+    <!-- Sube el límite de participants de ~64 (default) a 240.        -->
+    <!-- Necesario en este repo: simulation.launch.py (Clearpath) +    -->
+    <!-- navigation_amcl.launch.py (Nav2) totalizan ~35 nodos vivos,   -->
+    <!-- y si algún proceso muere por SIGABRT / SIGKILL deja           -->
+    <!-- participants huérfanos que ocupan slots durante minutos.      -->
+    <Discovery>
+      <MaxAutoParticipantIndex>240</MaxAutoParticipantIndex>
+    </Discovery>
+  </Domain>
+</CycloneDDS>

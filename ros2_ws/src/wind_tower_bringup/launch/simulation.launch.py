@@ -37,10 +37,14 @@ ARGUMENTS = [
         default_value=[EnvironmentVariable('HOME'), '/clearpath/'],
         description='Ruta al directorio con robot.yaml de Clearpath',
     ),
-    DeclareLaunchArgument('x',   default_value='0.0',   description='Spawn X del robot'),
-    DeclareLaunchArgument('y',   default_value='-10.0', description='Spawn Y del robot'),
-    DeclareLaunchArgument('z',   default_value='0.3',   description='Spawn Z del robot'),
-    DeclareLaunchArgument('yaw', default_value='1.5708',description='Spawn yaw (rad)'),
+    # Spawn: dentro de la sala de carga (Y=22 a Y=30), mirando al sur (yaw=π)
+    # hacia la puerta central del separador norte y la rampa al tubo.
+    # NO usar Y=-10: ahí está roller_frame_south (8m × 1.5m × 0.8m) y el
+    # robot spawneaba encima del bastidor del virador sur.
+    DeclareLaunchArgument('x',   default_value='0.0',     description='Spawn X del robot'),
+    DeclareLaunchArgument('y',   default_value='25.0',    description='Spawn Y del robot'),
+    DeclareLaunchArgument('z',   default_value='0.3',     description='Spawn Z del robot'),
+    DeclareLaunchArgument('yaw', default_value='3.14159', description='Spawn yaw (rad) — π = mirando al sur hacia la rampa'),
 ]
 
 
