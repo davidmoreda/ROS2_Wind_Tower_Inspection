@@ -1,0 +1,225 @@
+\documentclass[11pt,a4paper]{article}
+\input{preamble}
+
+\title{Practica 3 -- Configuracion de MoveIt 2 para el brazo manipulador del Husky+UR5e}
+\author{
+  [Nombre 1 Apellidos] -- [NIA 1] \\
+  [Nombre 2 Apellidos] -- [NIA 2] \\
+  [Nombre 3 Apellidos] -- [NIA 3] \\
+  \\
+  Master en Inteligencia Artificial -- Robotica Inteligente
+}
+\date{[Fecha de entrega]}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\section{Introduccion y objetivo}
+\label{sec:intro}
+
+% TODO: 1 parrafo.
+% - Crear un entorno de planificacion con MoveIt 2 para nuestro brazo
+%   manipulador.
+% - Justificar que se entrega con UR5e en lugar del ABB IRB-120 que pide el
+%   PDF, con autorizacion del profesor. Razon: continuidad con el TFM
+%   (Husky+UR5e+camara para inspeccion de torres eolicas, Practicas 1 y 2).
+% - Mencionar que la distro es ROS 2 Humble (no Jazzy) por coherencia con el
+%   resto del repositorio.
+% - Aclarar que la rama practica-3 contiene el repositorio completo del TFM
+%   y que esta memoria se centra solo en el scope MoveIt 2.
+[Resumen del objetivo: construir el entorno de planificacion y ejecucion de
+trayectorias con MoveIt 2 sobre el brazo UR5e montado en el Husky A200. El PDF
+original pide ABB IRB-120 en Jazzy, pero el profesor nos ha autorizado a usar
+el UR5e en Humble por continuidad con el TFM. La configuracion vive en el
+paquete \texttt{wind\_tower\_arm\_control} y la SRDF la genera Clearpath. La
+rama \texttt{practica-3} conserva el repositorio completo del TFM; en esta
+memoria solo se evalua el scope de MoveIt 2.]
+
+\section{Estructura del paquete}
+\label{sec:estructura}
+
+% TODO: insertar un arbol de directorios. El equivalente a irb120_moveit_config
+% es wind_tower_arm_control. Mencionar:
+% - config/  : 8 YAML + moveit.rviz
+% - launch/  : move_group.launch.py (demo) + arm_control.launch.py (extra TFM)
+% - wind_tower_arm_control/ : arm_inspection_node.py (extra TFM)
+
+\begin{lstlisting}[language=bash,caption={Estructura del paquete \texttt{wind\_tower\_arm\_control}.}]
+ros2_ws/src/wind_tower_arm_control/
+|-- config/
+|   |-- joint_limits.yaml
+|   |-- kinematics.yaml
+|   |-- moveit_controllers.yaml
+|   |-- ompl_planning.yaml
+|   |-- pilz_cartesian_limits.yaml
+|   |-- octomap_sensors.yaml
+|   |-- arm_inspection_params.yaml
+|   `-- moveit.rviz
+|-- launch/
+|   |-- move_group.launch.py        # equivalente a demo.launch.py del PDF
+|   `-- arm_control.launch.py
+|-- wind_tower_arm_control/
+|   `-- arm_inspection_node.py
+|-- package.xml
+`-- setup.py
+\end{lstlisting}
+
+\section{Modelo del robot y SRDF}
+\label{sec:modelo}
+
+% TODO:
+% - Explicar que el URDF/Xacro del Husky+UR5e lo genera Clearpath en runtime
+%   a partir de wind_tower_bringup/config/robot.yaml.
+% - El URDF extras (camara de inspeccion) esta en
+%   wind_tower_description/urdf/inspection_camera_lighting.urdf.xacro.
+% - La SRDF vive en ~/clearpath/robot.srdf y define:
+%   - Grupo cinematico `manipulator` con las 6 joints del UR5e.
+%   - Estados predefinidos: home, ready, inspeccion.
+%   - Pares de colisiones deshabilitadas.
+
+\fig[0.75]{rviz_robot_loaded.png}{Husky+UR5e cargado en RViz con el plugin MotionPlanning.}
+
+\begin{table}[H]
+  \centering
+  \caption{Articulaciones del UR5e con sus limites principales.}
+  \label{tab:joints}
+  \begin{tabularx}{\linewidth}{lXrrr}
+    \toprule
+    Joint & Tipo & Min (rad) & Max (rad) & V max (rad/s) \\
+    \midrule
+    shoulder\_pan\_joint    & revolute & -6.28 & 6.28 & 3.15 \\
+    shoulder\_lift\_joint   & revolute & -6.28 & 6.28 & 3.15 \\
+    elbow\_joint            & revolute & -3.14 & 3.14 & 3.15 \\
+    wrist\_1\_joint         & revolute & -6.28 & 6.28 & 3.20 \\
+    wrist\_2\_joint         & revolute & -6.28 & 6.28 & 3.20 \\
+    wrist\_3\_joint         & revolute & -6.28 & 6.28 & 3.20 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Configuracion de MoveIt 2}
+\label{sec:moveit}
+
+% TODO: una subseccion (o tabla) por cada YAML.
+
+\begin{table}[H]
+  \centering
+  \caption{Archivos de configuracion en \texttt{config/} y su funcion.}
+  \label{tab:yamls}
+  \begin{tabularx}{\linewidth}{lX}
+    \toprule
+    Archivo & Funcion \\
+    \midrule
+    \texttt{joint\_limits.yaml}         & Limites de velocidad y aceleracion por joint para planificacion. \\
+    \texttt{kinematics.yaml}            & Resolvedor IK del grupo \texttt{manipulator} (plugin KDL / TRAC-IK / OPW). \\
+    \texttt{moveit\_controllers.yaml}   & Mapeo MoveIt -> ROS 2 control: \texttt{JointTrajectoryController} con interfaz \texttt{FollowJointTrajectory}. \\
+    \texttt{ompl\_planning.yaml}        & Planificadores OMPL (RRTConnect por defecto, RRTstar opcional). \\
+    \texttt{pilz\_cartesian\_limits.yaml} & Limites cartesianos para Pilz (LIN, PTP, CIRC). \\
+    \texttt{octomap\_sensors.yaml}      & Octomap construido desde la camara de inspeccion (extra del TFM). \\
+    \texttt{arm\_inspection\_params.yaml} & Poses y tiempos del nodo de inspeccion (extra del TFM). \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Controlador JointTrajectory}
+\label{sec:controller}
+
+% TODO:
+% - El JointTrajectoryController esta declarado por Clearpath
+%   (gazebo_ros2_control en simulacion / ur_robot_driver en real).
+% - Implementa la interfaz FollowJointTrajectory que MoveIt 2 espera.
+% - Recibe trayectorias en /scaled_joint_trajectory_controller/
+%   follow_joint_trajectory.
+
+\section{Launcher principal (\texttt{move\_group.launch.py})}
+\label{sec:launcher}
+
+% TODO:
+% - Equivalente a demo.launch.py del PDF.
+% - Inicia: robot_state_publisher (via Clearpath), ros2_control_node (via
+%   Gazebo), move_group, rviz2 con moveit.rviz.
+% - Comando: ros2 launch wind_tower_arm_control move_group.launch.py
+
+\begin{lstlisting}[language=bash,caption={Secuencia minima para ejecutar una demo completa.}]
+# Terminal 1: simulacion Husky+UR5e en Gazebo
+ros2 launch wind_tower_bringup simulation.launch.py
+
+# Terminal 2: MoveIt + RViz con plugin MotionPlanning
+ros2 launch wind_tower_arm_control move_group.launch.py
+\end{lstlisting}
+
+\section{Pruebas realizadas}
+\label{sec:pruebas}
+
+% TODO: cubrir los 7 puntos del PDF (Seccion 4: Pruebas minimas).
+% Acompanar cada uno con una captura cuando sea relevante.
+
+\begin{enumerate}
+  \item Cargar el robot en RViz con el plugin Motion Planning. (Fig.~\ref{fig:rviz_robot_loaded.png})
+  \item Visualizar el estado actual del robot (TF coherente, brazo en pose inicial).
+  \item Seleccionar el grupo \texttt{manipulator} en el plugin.
+  \item Planificar trayectoria articular desde \texttt{home} hasta \texttt{ready}. (Fig.~\ref{fig:plan_articular.png})
+  \item Ejecutar la trayectoria (el brazo se mueve en Gazebo en sincronia).
+  \item Definir pose cartesiana del TCP y planificar hacia ella.
+  \item Mostrar trayectoria cartesiana sencilla (desplazamiento lineal del TCP). (Fig.~\ref{fig:plan_cartesiano.png})
+\end{enumerate}
+
+\fig[0.75]{plan_articular.png}{Planificacion articular de \texttt{home} a \texttt{ready} mostrando la trayectoria en RViz.}
+
+\fig[0.75]{plan_cartesiano.png}{Trayectoria cartesiana lineal del TCP a lo largo de un eje del mundo.}
+
+\section{Discrepancias con el PDF}
+\label{sec:discrepancias}
+
+% TODO: tabla o vinetas listando las discrepancias y como se han justificado.
+
+\begin{table}[H]
+  \centering
+  \caption{Discrepancias respecto al PDF original.}
+  \label{tab:discrepancias}
+  \begin{tabularx}{\linewidth}{lX}
+    \toprule
+    Aspecto & Decision en esta entrega \\
+    \midrule
+    Robot                  & UR5e (en Husky) en lugar del ABB IRB-120, autorizado por el profesor. \\
+    Paquete                & \texttt{wind\_tower\_arm\_control} en lugar de \texttt{irb120\_moveit\_config}. \\
+    Grupo cinematico       & \texttt{manipulator} (estandar UR) en lugar de \texttt{arm}. \\
+    Distribucion ROS 2     & Humble en lugar de Jazzy, por coherencia con el resto del TFM. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Problemas encontrados y soluciones}
+\label{sec:problemas}
+
+% TODO: vinetas con problemas reales del proyecto. Ejemplos plausibles:
+% - SRDF generada por Clearpath -> hay que leer ~/clearpath/robot.srdf, no
+%   esta en el repo.
+% - Conflictos de namespace: nodos de Clearpath bajo /robot/, MoveIt en raiz.
+%   Solucion: relays de /robot/tf -> /tf y /robot/robot_description ->
+%   /robot_description.
+% - JointTrajectoryController de Clearpath se llama
+%   scaled_joint_trajectory_controller, actualizar moveit_controllers.yaml.
+% - Octomap_sensors.yaml: si se activa, MoveIt construye Octomap desde la
+%   camara, pero hay que verificar QoS del topico de pointcloud.
+
+\begin{itemize}
+  \item [Problema 1]: [descripcion y solucion].
+  \item [Problema 2]: [descripcion y solucion].
+  \item [Problema 3]: [descripcion y solucion].
+\end{itemize}
+
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+% TODO: 1 parrafo. Lo aprendido + integracion con el TFM (este MoveIt se usa
+% en la mision de inspeccion para mover el brazo a poses sobre la torre).
+[Conclusiones breves: MoveIt 2 queda configurado y operativo sobre el
+Husky+UR5e en simulacion. El paquete \texttt{wind\_tower\_arm\_control} cubre
+los requisitos del PDF salvo el robot concreto, justificado en la
+Sec.~\ref{sec:discrepancias}. Este entorno se reutiliza en la mision de
+inspeccion del TFM.]
+
+\end{document}

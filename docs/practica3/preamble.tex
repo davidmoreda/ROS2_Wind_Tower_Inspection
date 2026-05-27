@@ -1,0 +1,57 @@
+% Preambulo comun para la memoria de Practica 3.
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-tabla]{babel}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black,
+}
+
+\usepackage{enumitem}
+\setlist{nosep}
+
+\definecolor{codebg}{RGB}{245,245,245}
+\definecolor{codekw}{RGB}{0,90,140}
+\definecolor{codestr}{RGB}{160,40,40}
+\definecolor{codecmt}{RGB}{90,120,90}
+\lstdefinestyle{compact}{
+  backgroundcolor=\color{codebg},
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{codekw}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecmt}\itshape,
+  breaklines=true,
+  showstringspaces=false,
+  frame=single,
+  framerule=0pt,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=4pt,
+  belowskip=4pt,
+}
+\lstset{style=compact}
+
+\newcommand{\fig}[3][0.85]{%
+  \begin{figure}[H]
+    \centering
+    \includegraphics[width=#1\linewidth]{figures/#2}
+    \caption{#3}
+    \label{fig:#2}
+  \end{figure}%
+}
