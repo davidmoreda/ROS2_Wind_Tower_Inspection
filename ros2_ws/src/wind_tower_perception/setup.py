@@ -41,6 +41,7 @@ setup(
             'image_capture = wind_tower_perception.image_capture_node:main',
             'defect_mapper = wind_tower_perception.defect_mapper_node:main',
             'synthetic_capture = wind_tower_perception.synthetic_capture_node:main',
+            'auto_dataset = wind_tower_perception.auto_dataset_node:main',
             'generate_synthetic_world = '
             'wind_tower_perception.scripts.generate_synthetic_world:main',
             'train_yolo = wind_tower_perception.scripts.train_yolo:main',

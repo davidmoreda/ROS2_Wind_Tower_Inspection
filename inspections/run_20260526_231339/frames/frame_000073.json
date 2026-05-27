@@ -1,0 +1,42 @@
+{
+  "run_id": "run_20260526_231339",
+  "frame_index": 73,
+  "image_path": "frames/frame_000073.jpg",
+  "capture_reason": "detection",
+  "wall_clock_iso": "2026-05-26T21:26:39.185373Z",
+  "ros_stamp_s": 504.102,
+  "node_stamp_s": 1779830799.1853998,
+  "image": {
+    "width": 1280,
+    "height": 720,
+    "frame_id": "robot/robot/arm_0_wrist_3_link/inspection_camera"
+  },
+  "mission_state": "IDLE",
+  "cylindrical_pose": {
+    "x_m": 2.0931356199323443,
+    "theta_tube_deg": 0.0004211941337551772,
+    "theta_surface_deg": 0.0004211941337551772,
+    "yaw_deg": -55.15725341532786,
+    "in_tube_limits": true
+  },
+  "detections": [
+    {
+      "class_id": "through_hole",
+      "score": 0.9258593320846558,
+      "cx_px": 496.6108093261719,
+      "cy_px": 137.79632568359375,
+      "w_px": 47.29815673828125,
+      "h_px": 46.9444580078125,
+      "radius_px": 16.660015322033566
+    },
+    {
+      "class_id": "through_hole",
+      "score": 0.9234288930892944,
+      "cx_px": 639.486572265625,
+      "cy_px": 112.41517639160156,
+      "w_px": 46.01806640625,
+      "h_px": 46.506988525390625,
+      "radius_px": 16.35650179873215
+    }
+  ]
+}

@@ -12,7 +12,7 @@ cd ~/ROS2_wind_tower_inspection
 ```
 
 Prerrequisitos: ver [../operation/HOW_TO_LAUNCH.md](../operation/HOW_TO_LAUNCH.md) §0.
-
+<!--  -->
 El workspace ROS 2 vive en `ros2_ws/`. Los launchers, nodos y configs están en `ros2_ws/src/`.
 
 ---

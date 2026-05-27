@@ -28,6 +28,8 @@ and the synthetic SDF is being simulated)::
         ground_truth_path:=~/wind_tower_synthetic/defects_ground_truth.yaml
 """
 
+import os
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
@@ -55,6 +57,15 @@ def generate_launch_description():
     publish_static_world_tf = LaunchConfiguration('publish_static_world_tf')
     ground_truth_path = LaunchConfiguration('ground_truth_path')
     dataset_output_dir = LaunchConfiguration('dataset_output_dir')
+    synthetic_save_empty_frames = LaunchConfiguration(
+        'synthetic_save_empty_frames')
+    synthetic_write_label_files = LaunchConfiguration(
+        'synthetic_write_label_files')
+    synthetic_camera_frame = LaunchConfiguration('synthetic_camera_frame')
+    synthetic_tf_fallback_camera_frame = LaunchConfiguration(
+        'synthetic_tf_fallback_camera_frame')
+    synthetic_allow_intrinsics_fallback = LaunchConfiguration(
+        'synthetic_allow_intrinsics_fallback')
 
     spawn_x = LaunchConfiguration('spawn_x')
     spawn_y = LaunchConfiguration('spawn_y')
@@ -65,11 +76,13 @@ def generate_launch_description():
 
     declared = [
         DeclareLaunchArgument(
-            'backend', default_value='hough',
+            'backend', default_value='yolo',
             description="Detector backend: 'hough' or 'yolo'.",
         ),
         DeclareLaunchArgument(
-            'yolo_model_path', default_value='',
+            'yolo_model_path',
+            default_value=os.path.expanduser(
+                '~/ROS2_Wind_Tower_Inspection/ros2_ws/models/best.pt'),
             description='Path to a .pt YOLO checkpoint when backend=yolo.',
         ),
         DeclareLaunchArgument(
@@ -100,8 +113,52 @@ def generate_launch_description():
             description='Path to the defects ground-truth YAML (synthetic capture).',
         ),
         DeclareLaunchArgument(
-            'dataset_output_dir', default_value='~/wind_tower_dataset',
+            'dataset_output_dir',
+            default_value=(
+                '~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/'
+                'wind_tower_dataset'
+            ),
             description='Output directory for the YOLO dataset.',
+        ),
+        DeclareLaunchArgument(
+            'synthetic_save_empty_frames',
+            default_value='false',
+            description=(
+                'When true, synthetic_capture writes frames even if no defect '
+                'label is visible. Useful to debug camera and TF.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'synthetic_write_label_files',
+            default_value='true',
+            description=(
+                'When false, synthetic_capture saves only images for manual '
+                'labelling tools such as Roboflow.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'synthetic_camera_frame',
+            default_value='auto',
+            description=(
+                'TF frame used by synthetic_capture for projection. Use auto '
+                'to read the frame from the image header.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'synthetic_tf_fallback_camera_frame',
+            default_value='inspection_camera_optical_frame',
+            description=(
+                'TF frame used when the image header contains a Gazebo sensor '
+                'path instead of a ROS TF frame.'
+            ),
+        ),
+        DeclareLaunchArgument(
+            'synthetic_allow_intrinsics_fallback',
+            default_value='true',
+            description=(
+                'Use camera intrinsics derived from image size and the URDF '
+                'horizontal FOV if /inspection/camera/camera_info is missing.'
+            ),
         ),
         DeclareLaunchArgument('spawn_x', default_value='0.0',
                               description='Robot spawn X (world). Matches simulation.launch.'),
@@ -174,6 +231,13 @@ def generate_launch_description():
             {
                 'ground_truth_path': ground_truth_path,
                 'output_dir': dataset_output_dir,
+                'save_empty_frames': synthetic_save_empty_frames,
+                'write_label_files': synthetic_write_label_files,
+                'camera_frame': synthetic_camera_frame,
+                'tf_fallback_camera_frame':
+                    synthetic_tf_fallback_camera_frame,
+                'allow_intrinsics_fallback':
+                    synthetic_allow_intrinsics_fallback,
             },
         ],
         condition=IfCondition(use_synthetic_capture),

@@ -18,13 +18,58 @@ ls /dev/input/event*           # debe aparecer al menos uno
 echo $ROS_DISTRO               # jazzy
 ```
 
+Si el mando no aparece en WSL2:
+
+```powershell
+# PowerShell admin en Windows
+winget install --interactive --exact dorssel.usbipd-win
+# Cierra y vuelve a abrir PowerShell admin tras instalar usbipd-win.
+usbipd list
+usbipd bind --busid <id>        # solo la primera vez
+usbipd attach --wsl --busid <id>
+```
+
+Si Windows no reconoce `winget`, instala primero **App Installer / Instalador de
+aplicaciones** desde Microsoft Store, o instala `usbipd-win` directamente desde:
+
+```text
+https://github.com/dorssel/usbipd-win/releases/latest
+```
+
+Descarga el `.msi`, instálalo, cierra y vuelve a abrir PowerShell admin. Si el
+comando aún no aparece en el `PATH`, prueba:
+
+```powershell
+& "C:\Program Files\usbipd-win\usbipd.exe" list
+```
+
+En Ubuntu/WSL:
+
+```bash
+ls /dev/input/event*
+python3 - <<'PY'
+import evdev
+for path in evdev.list_devices():
+    dev = evdev.InputDevice(path)
+    print(path, dev.name)
+PY
+```
+
+`inspection.launch.py` detecta el DualSense automáticamente por nombre. Si hiciera
+falta forzar el evento:
+
+```bash
+ros2 launch wind_tower_inspection_behaviour inspection.launch.py ps5_device_path:=/dev/input/event0
+```
+
 ---
 
 ## 1. Compilar
 
 ```bash
-cd ~/ROS2_wind_tower_inspection/ros2_ws
+cd ~/ROS2_Wind_Tower_Inspection/ros2_ws
 ai-on
+export PYTHONPATH=/usr/lib/python3/dist-packages:${PYTHONPATH:-}
 colcon build --packages-select wind_tower_simulation wind_tower_description wind_tower_bringup wind_tower_inspection_behaviour
 source install/setup.bash
 ```
@@ -39,10 +84,20 @@ colcon build --packages-up-to wind_tower_bringup
 
 ## 2. Lanzar — flujo MVP (dos terminales)
 
+Antes de lanzar nodos ROS en cada terminal, exportar la configuración de
+CycloneDDS del repo. Evita `Failed to find a free participant index for domain 0`
+cuando Gazebo, RViz, bridges y nodos de inspección están activos a la vez:
+
+```bash
+export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
+```
+
 ### Terminal 1: simulación + bridges
 
 ```bash
-cd ~/ROS2_wind_tower_inspection/ros2_ws && ai-on
+cd ~/ROS2_Wind_Tower_Inspection/ros2_ws && ai-on
+source install/setup.bash
+export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ros2 launch wind_tower_bringup simulation.launch.py
 ```
 
@@ -56,7 +111,9 @@ Esperar a ver:
 ### Terminal 2: misión de inspección
 
 ```bash
-cd ~/ROS2_wind_tower_inspection/ros2_ws && ai-on
+cd ~/ROS2_Wind_Tower_Inspection/ros2_ws && ai-on
+source install/setup.bash
+export CYCLONEDDS_URI=file://$PWD/config/cyclonedds.xml
 ros2 launch wind_tower_inspection_behaviour inspection.launch.py
 ```
 

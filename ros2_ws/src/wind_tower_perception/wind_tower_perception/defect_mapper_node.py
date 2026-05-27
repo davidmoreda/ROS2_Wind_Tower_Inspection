@@ -32,13 +32,15 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 import rclpy
+from cv_bridge import CvBridge
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy._rclpy_pybind11 import RCLError
-from sensor_msgs.msg import CameraInfo
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Float64, String
 from tf2_ros import Buffer, TransformListener, TransformException
 from vision_msgs.msg import Detection2DArray
@@ -87,16 +89,23 @@ class DefectMapperNode(Node):
 
         self._clusters: List[DefectCluster] = []
         self._next_cluster_id = 1
+        self._bridge = CvBridge()
+        self._latest_annotated_image: Optional[Image] = None
 
         self._pub_cyl = self.create_publisher(
             String, '/inspection/defects/cylindrical', 10)
         self._pub_cum = self.create_publisher(
             String, '/inspection/defects/cumulative', 10)
+        self._pub_image_pos = self.create_publisher(
+            Image, '/inspection/defects/image_position', 10)
 
         self.create_subscription(
             CameraInfo, self._camera_info_topic, self._camera_info_cb, 5)
         self.create_subscription(
             Detection2DArray, self._detections_topic, self._detections_cb, 10)
+        self.create_subscription(
+            Image, '/inspection/detections/image_annotated',
+            self._annotated_image_cb, 10)
         self.create_subscription(
             String, self._cylindrical_pose_topic, self._cylindrical_pose_cb, 10)
         self.create_subscription(
@@ -181,6 +190,9 @@ class DefectMapperNode(Node):
             )
 
     # ------------------------------------------------------------- callbacks
+    def _annotated_image_cb(self, msg: Image):
+        self._latest_annotated_image = msg
+
     def _camera_info_cb(self, msg: CameraInfo):
         K = np.array(msg.k, dtype=float).reshape(3, 3)
         if K[0, 0] <= 0.0 or K[1, 1] <= 0.0:
@@ -269,6 +281,40 @@ class DefectMapperNode(Node):
                 'detections': per_frame,
             })))
             self._publish_cumulative()
+            self._publish_image_with_positions(per_frame)
+
+    # ------------------------------------------------- image position overlay
+    def _publish_image_with_positions(self, per_frame: list) -> None:
+        if self._latest_annotated_image is None:
+            return
+        try:
+            img = self._bridge.imgmsg_to_cv2(
+                self._latest_annotated_image, desired_encoding='bgr8')
+        except Exception:
+            return
+
+        for det in per_frame:
+            u = int(det['pixel_center']['u'])
+            v = int(det['pixel_center']['v'])
+            x_axial = det['x_axial_m']
+            theta = det['theta_surface_deg']
+            label = f"x={x_axial:.1f}m  th={theta:.1f}deg"
+
+            (tw, th), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
+            ty = max(v - 8, th + baseline)
+            tx = min(u, img.shape[1] - tw - 2)
+            cv2.rectangle(img,
+                          (tx - 1, ty - th - baseline),
+                          (tx + tw + 1, ty + baseline),
+                          (0, 0, 0), cv2.FILLED)
+            cv2.putText(img, label, (tx, ty),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 80), 1,
+                        cv2.LINE_AA)
+
+        out = self._bridge.cv2_to_imgmsg(img, encoding='bgr8')
+        out.header = self._latest_annotated_image.header
+        self._pub_image_pos.publish(out)
 
     # ----------------------------------------------------------- projection
     def _project_pixel_to_cylinder(

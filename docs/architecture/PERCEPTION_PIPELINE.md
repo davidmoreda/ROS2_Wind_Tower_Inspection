@@ -136,14 +136,16 @@ ros2 launch wind_tower_perception perception.launch.py \
     use_defect_mapper:=false
 
 # 4) Conducir manualmente el robot (DualSense) por todo el tubo. El nodo
-#    irá guardando imágenes etiquetadas en ~/wind_tower_dataset/.
+#    irá guardando imágenes etiquetadas en
+#    ~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset/.
 
 # 5) Copiar el dataset.yaml a la raíz del dataset
-cp ros2_ws/src/wind_tower_perception/config/dataset.yaml ~/wind_tower_dataset/
+cp ros2_ws/src/wind_tower_perception/config/dataset.yaml \
+   ~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset/
 
 # 6) Entrenar
 python3 -m wind_tower_perception.scripts.train_yolo \
-    --dataset ~/wind_tower_dataset/dataset.yaml \
+    --dataset ~/ROS2_Wind_Tower_Inspection/ros2_ws/datasets/wind_tower_dataset/dataset.yaml \
     --weights yolov8n.pt --epochs 80 --imgsz 640 --device 0
 ```
 
