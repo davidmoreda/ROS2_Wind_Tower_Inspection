@@ -21,15 +21,19 @@ Uso:
   ros2 run wind_tower_bringup mission_navigator --ros-args -p target:=maintenance_station
 
 Arquitectura TF:
-  map → odom        (publicado por EKF2, fusionando /amcl_pose + odometría)
+  map → odom        (publicado directamente por AMCL con tf_broadcast:true)
   odom → base_link  (publicado por Clearpath EKF1)
 
-  AMCL tiene tf_broadcast:false → solo publica /amcl_pose
-  EKF2 (ekf_map_node) fusiona /amcl_pose + /robot/platform/odom/filtered → map→odom
+  AMCL tiene tf_broadcast:true → publica map→odom directamente en cada ciclo.
+  El EKF2 (ekf_map_node) ha sido eliminado: causaba que las correcciones grandes
+  de pose (2D Pose Estimate desde RViz) fueran rechazadas por el filtro Kalman
+  (pose0_rejection_threshold), haciendo que Nav2 planificara desde la posición
+  antigua y el robot navegara en la dirección incorrecta.
 
 IMPORTANTE — Pose inicial:
   Al arrancar, el robot puede estar desorientado en el mapa.
   Usa RViz → "2D Pose Estimate" para darle la posición real al inicio.
+  Con tf_broadcast:true AMCL actualiza map→odom inmediatamente.
   AMCL convergerá en 2-3 movimientos.
 """
 
@@ -73,7 +77,6 @@ def generate_launch_description():
 
     nav2_params  = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
     amcl_params  = os.path.join(pkg_bringup, 'config', 'amcl_params.yaml')
-    ekf_map_cfg  = os.path.join(pkg_bringup, 'config', 'ekf_map.yaml')
     nav2_rviz    = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
@@ -123,8 +126,11 @@ def generate_launch_description():
         ],
     )
 
-    # ── map_server + AMCL + EKF2 ──────────────────────────────────────────────
+    # ── map_server + AMCL ─────────────────────────────────────────────────────
     # Delay 17s (2s tras percepción para que /scan esté disponible)
+    # AMCL publica map→odom directamente (tf_broadcast:true).
+    # El EKF2 ha sido eliminado: causaba que el "2D Pose Estimate" de RViz no se
+    # propagara a Nav2 porque el filtro Kalman rechazaba correcciones grandes.
     localization = TimerAction(
         period=17.0,
         actions=[
@@ -140,7 +146,7 @@ def generate_launch_description():
                 ],
                 remappings=remappings_tf,
             ),
-            # AMCL localiza el robot en el mapa (tf_broadcast:false → publica /amcl_pose)
+            # AMCL localiza el robot en el mapa (tf_broadcast:true → publica map→odom)
             Node(
                 package='nav2_amcl',
                 executable='amcl',
@@ -148,17 +154,6 @@ def generate_launch_description():
                 output='screen',
                 parameters=[amcl_params, {'use_sim_time': use_sim_time}],
                 remappings=remappings_tf,
-            ),
-            # EKF2 fusiona /amcl_pose + odometría → publica map→odom TF
-            Node(
-                package='robot_localization',
-                executable='ekf_node',
-                name='ekf_map_node',
-                output='screen',
-                parameters=[ekf_map_cfg, {'use_sim_time': use_sim_time}],
-                remappings=remappings_tf + [
-                    ('odometry/filtered', '/odometry/global'),
-                ],
             ),
             # Lifecycle manager para map_server y amcl
             Node(

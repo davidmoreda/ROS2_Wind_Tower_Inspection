@@ -19,13 +19,15 @@ amcl:
     global_frame_id: "map"
     odom_frame_id: "odom"
 
-    # ── IMPORTANTE: tf_broadcast FALSE ────────────────────────────────────────
-    # AMCL NO publica map→odom directamente.
-    # En su lugar, publica /amcl_pose que entra en EKF2 (ekf_map_node).
-    # EKF2 es quien publica map→odom con filtrado suave.
-    # Si ponemos tf_broadcast: true aquí Y EKF2 también publica map→odom
-    # habrá conflicto de TF y comportamiento errático.
-    tf_broadcast: false
+    # ── IMPORTANTE: tf_broadcast TRUE ─────────────────────────────────────────
+    # AMCL publica map→odom directamente en cada ciclo de localización.
+    # El EKF2 (ekf_map_node) ha sido eliminado del pipeline de localización:
+    #   - El EKF2 rechazaba correcciones grandes de pose (pose0_rejection_threshold)
+    #     haciendo que el "2D Pose Estimate" de RViz no se propagara a Nav2.
+    #   - Con tf_broadcast:true, AMCL actualiza map→odom inmediatamente al
+    #     recibir el /initialpose de RViz, sin pasar por el filtro del EKF.
+    # El EKF1 de Clearpath (odom→base_link) sigue activo y no se toca.
+    tf_broadcast: true
 
     # ── Topic del lidar ───────────────────────────────────────────────────────
     scan_topic: /scan
