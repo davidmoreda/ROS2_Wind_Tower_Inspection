@@ -9,7 +9,7 @@ defect_detector:
       conf_threshold: 0.75
       iou_threshold: 0.45
       imgsz: 640
-      device: cpu            # set '0' for the first GPU
+      device: '0'            # GPU 0 (CUDA). Si no tienes GPU, pon 'cpu'.
 
     hough:
       gaussian_blur_kernel: 7
