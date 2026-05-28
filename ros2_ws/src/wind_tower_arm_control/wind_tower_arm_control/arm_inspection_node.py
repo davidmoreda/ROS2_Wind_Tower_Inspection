@@ -52,6 +52,8 @@ import os
 from typing import List, Optional
 
 import rclpy
+from builtin_interfaces.msg import Duration as DurationMsg
+from control_msgs.action import FollowJointTrajectory
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, JointConstraint, MoveItErrorCodes
 from rclpy.action import ActionClient
@@ -61,6 +63,7 @@ from rclpy._rclpy_pybind11 import RCLError
 from sensor_msgs.msg import JointState, Joy
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 
 # Behaviour keys.
@@ -91,6 +94,12 @@ class ArmInspectionNode(Node):
         self._sweep_index: int = 0
         self._sweep_active: bool = False
         self._sweep_done: bool = False
+        # Dirección alternante del sweep:
+        #   False (normal): 0° → -45° → -90° → ... → -360°
+        #   True  (reverso): -360° → -315° → ... → -45° → 0°
+        # Se invierte tras completar cada sweep, así nunca repetimos el
+        # mismo recorrido y el arm acaba siempre en el extremo opuesto.
+        self._sweep_direction_reverse: bool = False
         self._server_warned: bool = False
         self._hold_lookat_source: str = 'parameter'
         # Joy override: when set, takes precedence over mission_state and the
@@ -107,6 +116,19 @@ class ArmInspectionNode(Node):
 
         self._action_client = ActionClient(
             self, MoveGroup, self._move_group_action)
+
+        # Cliente directo al JointTrajectoryController para el SWEEP.
+        # MoveIt valida CheckStartStateBounds y rechaza el plan si el
+        # shoulder_pan acumulado de sweeps anteriores se sale de los
+        # límites del SRDF (que ignora has_position_limits=false del
+        # joint_limits.yaml). El controller acepta cualquier valor →
+        # bypaseamos MoveIt SOLO para el sweep.
+        self._traj_action_topic = '/robot/arm_0_joint_trajectory_controller/follow_joint_trajectory'
+        self._traj_action_client = ActionClient(
+            self, FollowJointTrajectory, self._traj_action_topic)
+        self._direct_sweep_active = False
+        self._direct_sweep_goal_future = None
+        self._direct_sweep_result_future = None
 
         self._pub_ready = self.create_publisher(
             Bool, '/arm/inspection_ready', 10)
@@ -452,10 +474,25 @@ class ArmInspectionNode(Node):
 
     def _pose_for(self, behaviour: str) -> Optional[List[float]]:
         if behaviour == HOME:
-            return self._home_pose
+            return self._pose_at_current_pan(self._home_pose)
         if behaviour == HOLD_LOOKAT:
-            return self._hold_lookat_pose
+            return self._pose_at_current_pan(self._hold_lookat_pose)
         return None
+
+    def _pose_at_current_pan(self, base_pose: List[float]) -> List[float]:
+        """Devuelve base_pose pero con shoulder_pan = pan actual.
+
+        Esto evita que MoveIt rechace el plan con CheckStartStateBounds
+        cuando el sweep ha dejado el arm en pan=-2π pero base_pose tiene
+        pan=0°. Al usar el pan actual como target, MoveIt no necesita
+        mover el pan (mismo valor) y solo planifica los OTROS joints
+        (shoulder_lift, elbow, wrists) para mantener la pose de cámara.
+        """
+        if self._current_arm_joints is None:
+            return list(base_pose)
+        pose = list(base_pose)
+        pose[0] = self._current_arm_joints[0]   # solo shoulder_pan dinámico
+        return pose
 
     def _on_pose_done(self, behaviour: str, ok: bool):
         if ok:
@@ -468,16 +505,75 @@ class ArmInspectionNode(Node):
 
     # ----------------------------------------------------------------- sweep
     def _start_sweep(self):
-        self._sweep_index = 0
+        """Barrido 360° UNIDIRECCIONAL vía JointTrajectoryController.
+
+        Bypasamos MoveIt para el sweep porque su CheckStartStateBounds
+        rechaza waypoints incluso con shoulder_pan declarado continuous
+        en el URDF (el modelo cargado en move_group no ve el cambio del
+        macro o tiene caché de límites). El JointTrajectoryController
+        de gz_ros2_control acepta cualquier valor y solo interpola.
+
+        Dirección alternante:
+          - Sweep #1 (normal):  pan_inicial → pan_inicial - 2π (derecha)
+          - Sweep #2 (reverso): pan_inicial → pan_inicial + 2π (izquierda)
+          - Sweep #3 (normal):  ...
+        Tras cada sweep, el arm queda en el extremo opuesto. Al siguiente
+        sweep arranca en la dirección contraria.
+        """
+        if self._current_arm_joints is None:
+            self.get_logger().warn(
+                'Sweep: aún no hay joint_state, retrasando.')
+            return
+        if not self._traj_action_client.server_is_ready():
+            self.get_logger().warn(
+                'Sweep: JointTrajectory action server no disponible. '
+                'Marco sweep_done para no bloquear la misión.')
+            self._sweep_active = False
+            self._sweep_done = True
+            self._behaviour_reached = True
+            return
+
+        cur_pan = self._current_arm_joints[0]
+        # Cada paso es ±45° (= π/4). 8 pasos = 360°. Sentido depende del flag.
+        step_sign = +1.0 if self._sweep_direction_reverse else -1.0
+        step = 0.7854 * step_sign   # +π/4 reverso (izquierda), -π/4 normal (derecha)
+
+        # 8 waypoints: pan_inicial+step, pan_inicial+2*step, ..., pan_inicial+8*step
+        # Eso es 360° en una sola dirección. El arm queda en pan_inicial ± 2π.
+        dt = 1.5   # s por waypoint → sweep total ~12 s
+        traj = JointTrajectory()
+        traj.joint_names = list(self._joint_names)
+        for i in range(8):
+            pt = JointTrajectoryPoint()
+            pt.positions = list(self._home_pose)
+            pt.positions[0] = cur_pan + (i + 1) * step
+            t = (i + 1) * dt
+            pt.time_from_start = DurationMsg(
+                sec=int(t),
+                nanosec=int((t - int(t)) * 1e9),
+            )
+            traj.points.append(pt)
+
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = traj
+
         self._sweep_active = True
+        self._direct_sweep_active = True
+        self._busy = True
+        direction = 'REVERSE (← izq)' if self._sweep_direction_reverse else 'NORMAL (→ der)'
         self.get_logger().info(
-            f'Starting raster sweep: {len(self._sweep_sequence)} poses.')
-        self._send_joint_goal(
-            self._sweep_sequence[0], self._on_sweep_waypoint_done)
+            f'Sweep {direction} via JointTrajectory: '
+            f'pan {cur_pan:+.3f} → {cur_pan + 8 * step:+.3f} '
+            f'({8} waypoints × {dt:.1f}s = {8*dt:.0f}s).'
+        )
+        self._direct_sweep_goal_future = self._traj_action_client.send_goal_async(goal)
+        self._direct_sweep_goal_future.add_done_callback(
+            self._on_direct_sweep_goal_response)
 
     def _on_sweep_waypoint_done(self, ok: bool):
+        """Callback ejecutado al completar cada waypoint del sweep."""
         if not ok:
-            # A single unreachable raster cell must not kill the whole scan.
+            # Un waypoint inalcanzable no debe matar el sweep entero.
             self.get_logger().warn(
                 f'Sweep pose {self._sweep_index + 1} failed; skipping it.')
         if self._compute_desired_behaviour() != SWEEP:
@@ -486,9 +582,18 @@ class ArmInspectionNode(Node):
             return
         self._sweep_index += 1
         if self._sweep_index >= len(self._sweep_sequence):
+            direction_done = (
+                'REVERSE (←)' if self._sweep_direction_reverse else 'NORMAL (→)'
+            )
+            # Alternar dirección para el siguiente sweep.
+            self._sweep_direction_reverse = not self._sweep_direction_reverse
+            next_dir = (
+                'REVERSE (←)' if self._sweep_direction_reverse else 'NORMAL (→)'
+            )
             self.get_logger().info(
-                'Sweep complete'
-                + (' (arm back at home).' if self._sweep_via_home else '.'))
+                f'Sweep {direction_done} complete. '
+                f'Next sweep will be {next_dir}.'
+            )
             self._sweep_active = False
             self._sweep_done = True
             self._behaviour_reached = True
@@ -499,6 +604,63 @@ class ArmInspectionNode(Node):
             self._sweep_sequence[self._sweep_index],
             self._on_sweep_waypoint_done,
         )
+
+    # --------------- Direct sweep via JointTrajectoryController ------------
+    def _on_direct_sweep_goal_response(self, future):
+        """Callback when JointTrajectoryController accepts/rejects the goal."""
+        try:
+            goal_handle = future.result()
+        except Exception as e:
+            self.get_logger().error(f'Sweep direct: send_goal failed: {e}')
+            self._finish_direct_sweep(success=False)
+            return
+        if not goal_handle.accepted:
+            self.get_logger().error('Sweep direct: goal REJECTED by controller.')
+            self._finish_direct_sweep(success=False)
+            return
+        self.get_logger().info('Sweep direct: goal accepted, executing...')
+        self._direct_sweep_result_future = goal_handle.get_result_async()
+        self._direct_sweep_result_future.add_done_callback(
+            self._on_direct_sweep_result)
+
+    def _on_direct_sweep_result(self, future):
+        """Callback when the trajectory finishes (or fails)."""
+        try:
+            result = future.result()
+            err = result.result.error_code if hasattr(result, 'result') else 0
+            ok = (err == 0)
+            if ok:
+                self.get_logger().info(
+                    'Sweep direct: COMPLETE (arm back at original pan).')
+            else:
+                self.get_logger().warn(
+                    f'Sweep direct: terminó con error_code={err}.')
+        except Exception as e:
+            self.get_logger().error(f'Sweep direct: result error: {e}')
+            ok = False
+        self._finish_direct_sweep(success=ok)
+
+    def _finish_direct_sweep(self, *, success: bool):
+        """Mark sweep as done y ALTERNA la dirección para el próximo."""
+        direction_done = (
+            'REVERSE (← izq)' if self._sweep_direction_reverse else 'NORMAL (→ der)'
+        )
+        self._sweep_direction_reverse = not self._sweep_direction_reverse
+        next_dir = (
+            'REVERSE (← izq)' if self._sweep_direction_reverse else 'NORMAL (→ der)'
+        )
+        self.get_logger().info(
+            f'Sweep {direction_done} '
+            f'{"OK" if success else "FAILED"}. '
+            f'Next sweep will be {next_dir}.'
+        )
+        self._direct_sweep_active = False
+        self._direct_sweep_goal_future = None
+        self._direct_sweep_result_future = None
+        self._sweep_active = False
+        self._sweep_done = True
+        self._busy = False
+        self._behaviour_reached = success
 
     # -------------------------------------------------------- MoveGroup goal
     def _send_joint_goal(self, positions: List[float], on_done):

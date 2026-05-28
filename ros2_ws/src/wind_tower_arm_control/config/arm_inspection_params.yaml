@@ -48,21 +48,44 @@ arm_inspection:
 
     # --- Mission state -> arm behaviour ------------------------------------
     # Parallel lists. Behaviour is one of: home, hold_lookat, sweep.
-    mission_states:     [AXIAL_SCAN,  INDEX_TUBE,  DETAIL_SCAN, IDLE]
-    mission_behaviours: [hold_lookat, hold_lookat, sweep,       home]
+    # Cubrimos AMBAS familias de estados:
+    #  - Legacy state machine (AXIAL_SCAN/INDEX_TUBE/DETAIL_SCAN/IDLE)
+    #  - mission_controller actual (MOVING_TO_INSPECTION_POINT,
+    #    INSPECTING, APPROACHING_INSPECTION, ...) — los publica directamente
+    #    en /inspection/state_text.
+    # En cada parada (INSPECTING) el arm hace sweep 360° + vuelta a home;
+    # entre puntos (MOVING_TO_INSPECTION_POINT) mantiene la pose apuntando
+    # a la pared para que la cámara grabe en streaming.
+    mission_states:
+      - AXIAL_SCAN
+      - INDEX_TUBE
+      - DETAIL_SCAN
+      - IDLE
+      - MOVING_TO_INSPECTION_POINT
+      - INSPECTING
+      - APPROACHING_INSPECTION
+      - INSPECTION_ABORTED
+      - INSPECTION_GUARD_STOP
+    mission_behaviours:
+      - hold_lookat
+      - hold_lookat
+      - sweep
+      - home
+      - hold_lookat
+      - sweep
+      - home
+      - home
+      - home
     default_behaviour: home
 
     # --- Poses (joint order = joint_names, radians) ------------------------
-    # home: pose in which the camera faces forward (Dani's "default" pose).
-    # = [0, -56, 50, -181, 0, 34] degrees -> radians:
-    home_joint_positions: [0.0000, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]
+    # home: pose with the camera looking slightly down at the tube wall.
+    # elbow subido (+0.3 rad ≈ +17°) → la cámara mira más al suelo.
+    home_joint_positions: [0.0000, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934]
 
-    # hold_lookat: pose held during AXIAL_SCAN / INDEX_TUBE. Default = same as
-    # home (camera already pointing at the wall). You can override it at
-    # runtime with: ros2 service call /arm/capture_hold_lookat std_srvs/srv/Trigger
-    # (the captured pose is persisted to hold_lookat_pose_file and overrides
-    # this value next time the node starts).
-    hold_lookat_joint_positions: [0.0000, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]
+    # hold_lookat: pose held during navigation between inspection points.
+    # Same as home — camera apuntando a la pared del tubo con tilt hacia abajo.
+    hold_lookat_joint_positions: [0.0000, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934]
     hold_lookat_pose_file: ~/.wind_tower_arm/hold_lookat.json
 
     # --- Sweep waypoints ---------------------------------------------------
@@ -73,16 +96,28 @@ arm_inspection:
     #
     # Capture poses by jogging the arm in RViz (MotionPlanning -> Joints tab),
     # checking the camera view, and reading the slider values.
-    sweep_via_home: true
+    sweep_via_home: false
     sweep_joint_positions_flat:
-      # 7 waypoints rotating shoulder_pan through 360° in 45° steps. All
-      # other joints stay at the base pose (lift/elbow/w1/w2/w3 = home).
-      # With sweep_via_home=true the full run is:
-      #   home (pan= 0°) -> 45° -> 90° -> 135° -> 180° -> 225° -> 270° -> 315° -> home
-      [0.7854, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan =  45°
-       1.5708, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan =  90°
-       2.3562, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 135°
-       3.1416, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 180°
-       3.9270, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 225°
-       4.7124, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934,   # pan = 270°
-       5.4978, -0.9774, 0.8727, -3.1591, 0.0000, 0.5934]   # pan = 315°
+      # Barrido 360° con DIRECCIÓN ALTERNANTE entre paradas:
+      #   - Parada 1: pan 0° → -45° → -90° → ... → -360° (gira derecha)
+      #   - Parada 2: pan -360° → -315° → -270° → ... → 0° (gira izquierda)
+      #   - Parada 3: 0° → -360° otra vez, etc.
+      # Así el arm nunca vuelve por el mismo camino — cada sweep es un
+      # 360° unidireccional. El código (arm_inspection_node) invierte
+      # automáticamente la dirección de los waypoints al final de cada
+      # sweep, así que SOLO listamos los 8 waypoints "normales" aquí.
+      #
+      # NOTA: para que MoveIt no rechace -360° como out-of-bounds, hay
+      # que parchear el URDF a shoulder_pan_joint type="continuous" Y
+      # has_position_limits=false en joint_limits.yaml (instrucciones
+      # en commits anteriores).
+      #
+      # elbow subido a 1.1727 rad (~+17°) → cámara mira más al suelo.
+      [-0.7854, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan =  -45°
+       -1.5708, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan =  -90°
+       -2.3562, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan = -135°
+       -3.1416, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan = -180°
+       -3.9270, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan = -225°
+       -4.7124, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan = -270°
+       -5.4978, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934,   # pan = -315°
+       -6.2832, -0.9774, 1.1727, -3.1591, 0.0000, 0.5934]   # pan = -360°
