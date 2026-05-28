@@ -75,6 +75,15 @@ INSP_START = (INSP_CENTER_X, 10.246)
 INSP_END   = (INSP_CENTER_X, 39.579)
 INSP_STEP  = 1.0    # metros entre paradas de inspeccion
 INSP_PAUSE_SEC = 1.0
+# Inspección del brazo (UR5e) en cada parada:
+#  - Publicamos state=INSPECTING → arm_inspection_node arranca sweep 360°
+#    (home → 7 waypoints @45° cada uno → home) vía MoveIt.
+#  - Esperamos /arm/inspection_ready=True antes de avanzar al siguiente
+#    punto. Si en INSP_ARM_TIMEOUT_S segundos no llega (MoveIt no planifica,
+#    p.ej.), registramos el fallo y seguimos. Polling cada INSP_ARM_POLL_S.
+INSP_ARM_TIMEOUT_S = 15.0   # sweep simple 360° ~8 s con velocity_scaling=0.15
+                            # (8 waypoints + retorno a home módulo 2π).
+INSP_ARM_POLL_S    = 0.2
 INSP_MAX_LATERAL_ERROR = 1.2   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
 INSP_MAX_ROLL_DEG = 8.0        # gravedad vertical: roll casi plano en calle axial
 INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
@@ -151,6 +160,26 @@ class MissionController(Node):
         self._inspection_guard_tripped = False
         self._inspection_returning = False
         self._inspection_pause_timer = None
+        # Estado del brazo durante una parada de inspección.
+        #
+        # Patrón "doble flanco": el arm publica /arm/inspection_ready=True
+        # CONSTANTEMENTE cuando cualquier behaviour deseado está alcanzado
+        # (también hold_lookat). Si solo miramos "ready==True" se cumple
+        # inmediatamente al entrar en pausa (residuo del hold_lookat previo)
+        # y el robot avanza antes de que el sweep arranque siquiera.
+        #
+        # Solución: tras publicar state=INSPECTING:
+        #   1) Esperar a ver ready=False  → confirma que arm cambió a
+        #      desired=sweep y empezó a moverse (busy)
+        #   2) Después esperar ready=True → sweep + vuelta a home OK
+        #
+        # _arm_pause_failures: lista de y (mundo) donde MoveIt no terminó
+        #                      en INSP_ARM_TIMEOUT_S — se vuelca al reporte
+        self._arm_inspection_ready = False     # último valor del topic
+        self._arm_pause_start_s = 0.0
+        self._arm_pause_failures = []
+        self._arm_pause_saw_false = False      # se cumplió el primer flanco
+        self._arm_pause_completed = False      # se cumplió el segundo flanco
         now = self._now_sec()
         self._last_progress_x = 0.0
         self._last_progress_y = 0.0
@@ -226,6 +255,11 @@ class MissionController(Node):
             PoseWithCovarianceStamped, '/amcl_pose', self._on_amcl_pose, 10
         )
         self.create_subscription(Imu, '/robot/sensors/imu_0/data', self._on_imu, 10)
+        # Señal de arm_inspection_node: True cuando el brazo ha terminado el
+        # sweep y ha vuelto a home — momento en que el robot puede avanzar.
+        self.create_subscription(
+            Bool, '/arm/inspection_ready', self._on_arm_inspection_ready, 10,
+        )
 
         # Camara — frame JPEG para streaming web
         self._camera_frame_lock = threading.Lock()
@@ -450,8 +484,13 @@ class MissionController(Node):
         return True, f'AMCL confirmado dist={dist:.2f} m cov_xy={cov_xy:.3f}'
 
     def _publish_inspection_state(self, state: str, detail: str = ''):
+        # /inspection/state_text → solo el state bare (sin detalle). Esto es
+        # lo que consume arm_inspection_node, que hace dict.get(state,
+        # default) con clave exacta — si publicas 'INSPECTING: punto 6/30'
+        # no matchea con 'INSPECTING' y el brazo se queda en default=home.
+        self._state_text_pub.publish(String(data=state))
+        # /inspection/mission_status → state + detail para la UI/log humano.
         text = state if not detail else f'{state}: {detail}'
-        self._state_text_pub.publish(String(data=text))
         self._mission_status_pub.publish(String(data=text))
 
     def _set_alarm(self, state: str, detail: str):
@@ -986,6 +1025,16 @@ class MissionController(Node):
         self._send_pose_goal(pose, phase)
 
     def _start_inspection_pause(self):
+        """Robot parado en un punto de inspección.
+
+        Dispara el sweep 360° del UR5e publicando state=INSPECTING (el
+        arm_inspection_node lo mapea a behaviour='sweep'). Luego espera
+        el patrón doble flanco en /arm/inspection_ready:
+          1) False → arm cambió a sweep y está moviéndose
+          2) True  → sweep completo + vuelta a home
+        Failsafe: tras INSP_ARM_TIMEOUT_S sigue igualmente y registra el
+        punto como 'arm_failed_at_y=X.XX' para el reporte.
+        """
         with self._lock:
             if not self._inspection_active:
                 return
@@ -994,20 +1043,83 @@ class MissionController(Node):
             x, y = self._inspection_points[self._inspection_index]
             self._moving = False
             self._inspection_paused = True
+            # Reseteo para esta parada: ignoramos el "ready=True" residual
+            # del hold_lookat previo y esperamos a ver primero False
+            # (sweep en marcha) y después True (sweep+home OK).
+            self._arm_inspection_ready = False
+            self._arm_pause_saw_false = False
+            self._arm_pause_completed = False
+            self._arm_pause_start_s = self._now_sec()
             self._status = (
                 f'INSPECTING punto {point_no}/{total} '
-                f'(x={x:.2f}, y={y:.2f}) durante {INSP_PAUSE_SEC:.0f}s'
+                f'(x={x:.2f}, y={y:.2f}) — esperando sweep brazo '
+                f'(timeout {INSP_ARM_TIMEOUT_S:.0f}s)'
             )
             if self._inspection_pause_timer is not None:
                 self._inspection_pause_timer.cancel()
+            # Polling cada 200 ms hasta que el brazo termine o timeout.
             self._inspection_pause_timer = self.create_timer(
-                INSP_PAUSE_SEC,
-                self._finish_inspection_pause,
+                INSP_ARM_POLL_S,
+                self._inspection_pause_tick,
             )
         self._publish_inspection_state(
             'INSPECTING',
-            f'punto {point_no}/{total}; parada {INSP_PAUSE_SEC:.0f}s',
+            f'punto {point_no}/{total}; sweep brazo, max {INSP_ARM_TIMEOUT_S:.0f}s',
         )
+
+    def _on_arm_inspection_ready(self, msg: Bool):
+        """Callback /arm/inspection_ready.
+
+        Implementa el patrón doble flanco para distinguir el ready=True
+        residual del hold_lookat previo del ready=True real tras un sweep.
+        Solo importa cuando estamos en pausa (_inspection_paused=True);
+        fuera de pausa solo actualizamos _arm_inspection_ready por si
+        otros usuarios lo consultan.
+        """
+        value = bool(msg.data)
+        self._arm_inspection_ready = value
+        # Solo cuenta el doble flanco dentro de una pausa activa.
+        if not self._inspection_paused:
+            return
+        if not value:
+            # Primer flanco: arm dejó ready (empezó a moverse para sweep).
+            self._arm_pause_saw_false = True
+        elif self._arm_pause_saw_false:
+            # Segundo flanco: arm dice ready tras haber estado moviéndose.
+            self._arm_pause_completed = True
+
+    def _inspection_pause_tick(self):
+        """Polling: avanza cuando se completa el doble flanco, o timeout."""
+        with self._lock:
+            if not self._inspection_active or not self._inspection_paused:
+                if self._inspection_pause_timer is not None:
+                    self._inspection_pause_timer.cancel()
+                    self._inspection_pause_timer = None
+                return
+            elapsed = self._now_sec() - self._arm_pause_start_s
+            done = self._arm_pause_completed
+            timed_out = elapsed >= INSP_ARM_TIMEOUT_S
+            if not done and not timed_out:
+                return  # seguimos esperando
+            if timed_out and not done:
+                # Registra el fallo y sigue (no aborta la misión).
+                x, y = self._inspection_points[self._inspection_index]
+                phase = (
+                    'sweep no inició' if not self._arm_pause_saw_false
+                    else 'sweep no terminó'
+                )
+                self.get_logger().warn(
+                    f'Arm sweep timeout ({INSP_ARM_TIMEOUT_S:.0f}s, '
+                    f'{phase}) en punto y={y:.2f}; sigo al siguiente.'
+                )
+                self._arm_pause_failures.append({
+                    'point_index': self._inspection_index,
+                    'x': float(x),
+                    'y': float(y),
+                    'reason': f'arm_sweep_timeout ({phase})',
+                })
+        # Llama fuera del lock para no anidar en _finish.
+        self._finish_inspection_pause()
 
     def _finish_inspection_pause(self):
         with self._lock:
@@ -1018,6 +1130,10 @@ class MissionController(Node):
                 return
             self._inspection_index += 1
             self._inspection_paused = False
+            # Reset por seguridad de cara a la siguiente parada.
+            self._arm_inspection_ready = False
+            self._arm_pause_saw_false = False
+            self._arm_pause_completed = False
         self._send_next_inspection_goal()
 
     def _finish_inspection_locked(self) -> bool:

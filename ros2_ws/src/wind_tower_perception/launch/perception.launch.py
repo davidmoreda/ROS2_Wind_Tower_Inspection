@@ -160,9 +160,11 @@ def generate_launch_description():
                 'horizontal FOV if /inspection/camera/camera_info is missing.'
             ),
         ),
+        # Defaults sincronizados con simulation.launch.py: spawn dentro de
+        # la sala de carga (Y=25), mirando al sur hacia la rampa/tubo.
         DeclareLaunchArgument('spawn_x', default_value='0.0',
                               description='Robot spawn X (world). Matches simulation.launch.'),
-        DeclareLaunchArgument('spawn_y', default_value='-10.0',
+        DeclareLaunchArgument('spawn_y', default_value='25.0',
                               description='Robot spawn Y (world). Matches simulation.launch.'),
         DeclareLaunchArgument('spawn_z', default_value='0.3',
                               description='Robot spawn Z (world). Matches simulation.launch.'),
@@ -170,8 +172,8 @@ def generate_launch_description():
                               description='Robot spawn roll (rad).'),
         DeclareLaunchArgument('spawn_pitch', default_value='0.0',
                               description='Robot spawn pitch (rad).'),
-        DeclareLaunchArgument('spawn_yaw', default_value='1.5708',
-                              description='Robot spawn yaw (rad). Default π/2 → robot faces world +Y.'),
+        DeclareLaunchArgument('spawn_yaw', default_value='3.14159',
+                              description='Robot spawn yaw (rad). π = mirando al sur hacia la rampa.'),
     ]
 
     world_to_odom_tf = Node(
