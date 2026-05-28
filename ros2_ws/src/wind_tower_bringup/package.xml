@@ -11,8 +11,11 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>ros_gz_image</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>trajectory_msgs</exec_depend>
 
   <!-- Nav2 + localización -->
@@ -25,6 +28,7 @@
   <exec_depend>nav2_simple_commander</exec_depend>
   <exec_depend>nav2_amcl</exec_depend>
   <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_dwb_controller</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

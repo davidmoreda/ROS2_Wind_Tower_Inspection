@@ -116,11 +116,8 @@ def _wp_pose(make_pose_fn, wp: dict, default_yaw: float = 1.5708):
 
 
 def _maintenance_right_gate_poses(make_pose_fn, maintenance: dict, gate_right: tuple):
-    first_inside = (maintenance.get('via_points') or [maintenance])[0]
-    right_lane_y = float(first_inside.get('y', maintenance['y']))
     poses = [
         make_pose_fn(*gate_right),
-        make_pose_fn(gate_right[0], right_lane_y, 1.5708),
     ]
     for via in maintenance.get('via_points') or []:
         poses.append(make_pose_fn(via['x'], via['y'], via.get('yaw', 1.5708)))
@@ -213,7 +210,7 @@ def build_mission_tree(
         return command
 
     home = waypoints.get('home_inspection', {'x': -0.026, 'y': 4.5, 'yaw': 1.5708})
-    ramp = waypoints.get('ramp_top', {'x': 0.160, 'y': 6.901, 'yaw': 1.5708})
+    ramp = waypoints.get('ramp_top', {'x': 0.245, 'y': 6.901, 'yaw': 1.5708})
     charge = waypoints.get('charging_station')
     maintenance = waypoints.get('maintenance_station')
 

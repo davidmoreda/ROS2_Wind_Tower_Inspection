@@ -27,13 +27,14 @@ from action_msgs.msg import GoalStatus
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped, TwistStamped
 from nav2_msgs.action import NavigateThroughPoses, NavigateToPose
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Image, Imu, PointCloud2
 from std_msgs.msg import Bool, Float32, String
 from std_srvs.srv import Empty
 from visualization_msgs.msg import Marker, MarkerArray
 
 from flask import (
     Flask,
+    Response,
     abort,
     jsonify,
     redirect,
@@ -226,6 +227,55 @@ class MissionController(Node):
         )
         self.create_subscription(Imu, '/robot/sensors/imu_0/data', self._on_imu, 10)
 
+        # Camara — frame JPEG para streaming web
+        self._camera_frame_lock = threading.Lock()
+        self._camera_jpeg: Optional[bytes] = None
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+        _cam_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.create_subscription(
+            Image,
+            '/inspection/camera/image_raw',
+            self._on_camera_image,
+            _cam_qos,
+        )
+        self.create_subscription(
+            Image,
+            '/robot/sensors/inspection_camera/image',
+            self._on_camera_image,
+            _cam_qos,
+        )
+
+        # Nube de puntos LiDAR — downsampled para streaming web
+        self._pointcloud_lock = threading.Lock()
+        self._pointcloud_pts: list = []
+        self.create_subscription(
+            PointCloud2,
+            '/velodyne_points',
+            self._on_pointcloud,
+            _cam_qos,
+        )
+
+        # URDF del robot — TRANSIENT_LOCAL para recibir el último valor publicado
+        self._robot_description_lock = threading.Lock()
+        self._robot_description = ''
+        from rclpy.qos import DurabilityPolicy
+        _urdf_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            String,
+            '/robot_description',
+            self._on_robot_description,
+            _urdf_qos,
+        )
+
         self.create_timer(0.5, self._battery_tick)
         self.create_timer(1.0, self._publish_markers)
         self.create_timer(0.2, self._inspection_guard_tick)
@@ -272,6 +322,91 @@ class MissionController(Node):
         with self._lock:
             self._imu_roll_deg = math.degrees(roll)
             self._imu_pitch_deg = math.degrees(pitch)
+
+    @staticmethod
+    def _ensure_cv2_path():
+        """Añade dist-packages al path si cv2 no está importable directamente."""
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            import sys
+            _dist = '/usr/lib/python3/dist-packages'
+            if _dist not in sys.path:
+                sys.path.insert(0, _dist)
+
+    def _on_camera_image(self, msg: Image):
+        try:
+            self._ensure_cv2_path()
+            import cv2
+            import numpy as np
+            # Soporta encoding bgr8, rgb8 y bgra8 habituales en Gazebo
+            enc = msg.encoding.lower()
+            channels = len(msg.data) // (msg.height * msg.width) if msg.height and msg.width else 3
+            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(
+                msg.height, msg.width, channels
+            )
+            if enc in ('rgb8', 'rgb'):
+                frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+            elif enc in ('bgra8',):
+                frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
+            elif enc in ('rgba8',):
+                frame = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)
+            elif enc in ('mono8',):
+                frame = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+            else:
+                frame = raw  # ya es BGR
+            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            with self._camera_frame_lock:
+                self._camera_jpeg = buf.tobytes()
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'Error codificando frame de camara: {exc}', throttle_duration_sec=5.0)
+
+    def get_camera_jpeg(self) -> Optional[bytes]:
+        with self._camera_frame_lock:
+            return self._camera_jpeg
+
+    def _on_pointcloud(self, msg: PointCloud2):
+        import struct
+        try:
+            fields = {f.name: f.offset for f in msg.fields}
+            x_off = fields.get('x', 0)
+            y_off = fields.get('y', 4)
+            z_off = fields.get('z', 8)
+            step = msg.point_step
+            n = msg.width * msg.height
+            stride = max(1, n // 500)
+            pts = []
+            data = bytes(msg.data)
+            for i in range(0, n, stride):
+                base = i * step
+                if base + z_off + 4 > len(data):
+                    break
+                x = struct.unpack_from('<f', data, base + x_off)[0]
+                y = struct.unpack_from('<f', data, base + y_off)[0]
+                z = struct.unpack_from('<f', data, base + z_off)[0]
+                if math.isfinite(x) and math.isfinite(y) and math.isfinite(z):
+                    r = math.hypot(x, y)
+                    if 0.3 < r < 25.0:
+                        pts.append([round(x, 2), round(y, 2), round(z, 2)])
+            with self._pointcloud_lock:
+                self._pointcloud_pts = pts
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(
+                f'Error parseando pointcloud: {exc}', throttle_duration_sec=5.0
+            )
+
+    def get_pointcloud(self) -> list:
+        with self._pointcloud_lock:
+            return list(self._pointcloud_pts)
+
+    def _on_robot_description(self, msg: String):
+        with self._robot_description_lock:
+            self._robot_description = msg.data
+        self.get_logger().info('robot_description recibido (%d bytes)' % len(msg.data))
+
+    def get_robot_description(self) -> str:
+        with self._robot_description_lock:
+            return self._robot_description
 
     def _get_robot_y(self) -> float:
         with self._lock:
@@ -773,7 +908,7 @@ class MissionController(Node):
 
         # Aproximación: ramp_top → inicio_tramo
         approach = [
-            self._pose(ramp.get('x', 0.160), ramp.get('y', 6.901), math.pi / 2),
+            self._pose(ramp.get('x', 0.245), ramp.get('y', 6.901), math.pi / 2),
             self._pose(x0, y0, math.pi / 2),
         ]
         points = []
@@ -1794,8 +1929,15 @@ class MissionController(Node):
                 'error_state': self._error_state,
                 'inspection_active': self._inspection_active,
                 'inspection_paused': self._inspection_paused,
+                'inspection_index':  self._inspection_index,
+                'inspection_count':  len(self._inspection_points),
                 'stuck_recovery_active': self._stuck_recovery_active,
                 'relocalization_active': self._relocalization_active,
+                'robot_x':   round(self._robot_x, 3),
+                'robot_y':   round(self._robot_y, 3),
+                'robot_yaw': round(self._robot_yaw, 4),
+                'imu_roll_deg':  round(self._imu_roll_deg, 1),
+                'imu_pitch_deg': round(self._imu_pitch_deg, 1),
                 'last_text_command': self._last_text_command,
                 'last_llm_command': self._last_llm_command,
                 'last_llm_reason': self._last_llm_reason,
@@ -1829,492 +1971,738 @@ _HTML = r'''<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Wind Tower Mission</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WTIS — Wind Tower Inspection System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Segoe UI',sans-serif;background:#0d0d1a;color:#ddd;padding:24px;max-width:720px;margin:auto}
-h1{color:#00d4ff;margin-bottom:18px;font-size:1.25rem;letter-spacing:1px}
-.bar-wrap{background:#222;border-radius:12px;overflow:hidden;height:34px;margin-bottom:14px;border:1px solid #333}
-.bar-fill{height:100%;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:.9rem;transition:width .6s}
-.status{background:#131326;border:1px solid #1e2d5a;border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:.88rem;line-height:1.7}
-.alarm{background:#3a1010;border:1px solid #d63b3b;color:#fff;border-radius:8px;padding:12px 14px;margin-bottom:18px;font-size:.9rem;line-height:1.5}
-.text-box{background:#101020;border:1px solid #26366d;border-radius:8px;padding:12px;margin-bottom:18px}
-.text-row{display:flex;gap:8px}
-.text-row input{flex:1;min-width:0;background:#080812;color:#fff;border:1px solid #36427a;border-radius:8px;padding:12px;font-size:.95rem}
-.text-row button{background:#0c7a78;color:#fff;border:0;border-radius:8px;padding:0 14px;font-weight:bold;cursor:pointer}
-.text-row .mic-btn{background:#1a3a6b;color:#fff;border:0;border-radius:8px;padding:0 13px;font-size:1.2rem;cursor:pointer;transition:background .2s}
-.text-row .mic-btn.listening{background:#8b0000;animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
-.voice-status{margin-top:6px;font-size:.76rem;color:#7fc4ff;min-height:1.2em}
-.intent{margin-top:8px;font-size:.78rem;color:#a9b7ff;line-height:1.4}
-.queue{background:#11111f;border:1px solid #2a3158;border-radius:8px;padding:12px;margin-bottom:18px;font-size:.86rem}
-.queue h2{font-size:.95rem;color:#b9d7ff;margin-bottom:8px}
-.queue ol{padding-left:22px;line-height:1.7}
-.queue .empty{color:#7f89a8}
-.queue .paused{color:#ffbe64;margin-top:6px;font-weight:bold}
-.queue-clear{margin-top:10px;width:100%;background:#4b234f;color:#fff;border:0;border-radius:8px;padding:10px;font-weight:bold;cursor:pointer}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.btn{width:100%;padding:22px 8px;font-size:.95rem;font-weight:bold;border:none;border-radius:10px;
-     cursor:pointer;transition:filter .15s,transform .1s;line-height:1.4}
-.btn:hover{filter:brightness(1.2)}
-.btn:active{transform:scale(.96)}
-.g{background:#1a6b30;color:#fff}
-.o{background:#8a3800;color:#fff}
-.b{background:#144d7a;color:#fff}
-.p{background:#5b2282;color:#fff}
-.r{background:#8b0000;color:#fff;grid-column:1/-1;font-size:1.05rem;letter-spacing:1px}
-.sub{display:block;font-size:.7rem;opacity:.7;font-weight:normal;margin-top:4px}
-.ok{color:#2ecc71}
-.report{margin-top:22px;background:#0f0f1e;border:1px solid #2a3158;border-radius:10px;padding:14px}
-.report-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px}
-.report-head h2{font-size:1rem;color:#b9d7ff;letter-spacing:.5px}
-.report-status{font-size:.78rem;padding:3px 8px;border-radius:999px;background:#1a3a6b;color:#cfe1ff}
-.report-status.running{background:#3a5a1a}
-.report-status.done{background:#1a6b30}
-.report-status.done_no_llm{background:#8a6b00}
-.report-status.error{background:#7b1a1a}
-.report-message{font-size:.82rem;color:#a9b7ff;margin-bottom:10px}
-.report-links{font-size:.78rem;margin-bottom:10px}
-.report-links a{color:#7fc4ff;text-decoration:none;margin-right:12px}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#040910;--panel:#060c18;--border:#0c2840;
+  --cyan:#00cfff;--cyan-dim:#00344a;
+  --amber:#ff6b00;--green:#00e87a;--red:#ff2244;
+  --text:#b8d4e8;--dim:#3a5068;
+  --font-ui:'Rajdhani',sans-serif;--font-mono:'Share Tech Mono',monospace;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--font-ui);font-size:15px;overflow-x:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.025) 3px,rgba(0,0,0,0.025) 4px);pointer-events:none;z-index:9999}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* ─── TOP BAR ─── */
+.topbar{display:flex;align-items:center;gap:12px;padding:8px 18px;border-bottom:1px solid var(--border);background:linear-gradient(90deg,#060c18,#030609);position:sticky;top:0;z-index:100;flex-wrap:wrap}
+.logo{font-size:1.05rem;font-weight:700;letter-spacing:3px;color:var(--cyan);text-transform:uppercase;text-shadow:0 0 24px rgba(0,207,255,.4);white-space:nowrap}
+.logo span{color:var(--text);font-weight:400}
+.topbar-spacer{flex:1}
+.status-pill{display:flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--border);border-radius:3px;font-family:var(--font-mono);font-size:.76rem;white-space:nowrap}
+.pulse-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pdot 2s ease-in-out infinite;flex-shrink:0}
+.pulse-dot.warn{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.pulse-dot.err{background:var(--red);box-shadow:0 0 8px var(--red);animation:blink .5s step-end infinite}
+@keyframes pdot{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+/* .batt-wrap/.batt-fill/.batt-text removed — replaced by inline SVG battery */
+
+/* ─── LAYOUT ─── */
+.main{padding:14px 18px;display:grid;gap:12px;max-width:1700px;margin:0 auto}
+.viz-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;height:370px}
+.ctrl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:1100px){.viz-row{grid-template-columns:1fr 1fr;height:auto}.viz-row .panel:last-child{grid-column:1/-1}}
+@media(max-width:700px){.viz-row,.ctrl-row{grid-template-columns:1fr}.viz-row{height:auto}}
+
+/* ─── PANELS ─── */
+.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:2px;overflow:hidden;display:flex;flex-direction:column}
+.panel::before{content:'';position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan);z-index:2;pointer-events:none}
+.panel::after{content:'';position:absolute;bottom:-1px;right:-1px;width:14px;height:14px;border-bottom:2px solid var(--cyan);border-right:2px solid var(--cyan);z-index:2;pointer-events:none}
+.panel-hd{display:flex;align-items:center;gap:8px;padding:6px 14px;border-bottom:1px solid var(--border);background:rgba(0,20,40,.5);flex-shrink:0}
+.panel-title{font-size:.7rem;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--cyan)}
+.panel-sub{font-size:.67rem;color:var(--dim);font-family:var(--font-mono);margin-left:auto}
+.panel-body{flex:1;overflow:hidden;position:relative}
+
+/* ─── 3D VIEWER ─── */
+#robot-canvas{width:100%!important;height:100%!important;display:block;cursor:grab}
+#robot-canvas:active{cursor:grabbing}
+.pc-overlay{position:absolute;bottom:7px;left:10px;font-family:var(--font-mono);font-size:.63rem;color:var(--dim);pointer-events:none;line-height:1.6}
+
+/* ─── CAMERA ─── */
+.cam-feed{width:100%;height:100%;object-fit:contain;background:#020508;display:block}
+.cam-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);transition:background .5s,box-shadow .5s;flex-shrink:0}
+.cam-dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+
+/* ─── MAP ─── */
+#map-canvas{width:100%;height:100%;display:block}
+
+/* ─── STATUS ─── */
+.data-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:10px 12px}
+.data-cell{display:flex;flex-direction:column;gap:2px}
+.data-label{font-size:.62rem;color:var(--dim);letter-spacing:1.5px;text-transform:uppercase}
+.data-value{font-family:var(--font-mono);font-size:.88rem;color:var(--cyan)}
+.data-value.ok{color:var(--green)}.data-value.warn{color:var(--amber)}.data-value.err{color:var(--red)}
+.status-readout{padding:8px 12px;font-family:var(--font-mono);font-size:.78rem;line-height:1.6;color:var(--text);border-top:1px solid var(--border);flex:1;overflow-y:auto}
+.alarm-bar{margin:0 12px 10px;padding:7px 11px;background:rgba(255,34,68,.08);border:1px solid rgba(255,34,68,.35);border-radius:2px;font-size:.78rem;color:var(--red);display:none}
+.alarm-bar.on{display:block}
+
+/* ─── COMMAND ─── */
+.cmd-section{padding:11px 12px;display:flex;flex-direction:column;gap:9px;flex:1}
+.cmd-row{display:flex;gap:6px}
+.cmd-input{flex:1;background:#030710;border:1px solid var(--cyan-dim);border-radius:3px;padding:8px 11px;color:var(--text);font-family:var(--font-mono);font-size:.83rem;outline:none;transition:border-color .2s}
+.cmd-input:focus{border-color:var(--cyan)}
+.cmd-input::placeholder{color:var(--dim)}
+.btn-sm{padding:0 13px;background:var(--cyan-dim);color:var(--cyan);border:1px solid var(--cyan-dim);border-radius:3px;font-family:var(--font-ui);font-weight:600;font-size:.78rem;letter-spacing:1px;cursor:pointer;transition:background .15s,color .15s;white-space:nowrap}
+.btn-sm:hover{background:var(--cyan);color:#000}
+.mic-btn{padding:0 11px;background:#0a1428;color:var(--text);border:1px solid var(--border);border-radius:3px;font-size:1.05rem;cursor:pointer;transition:background .2s}
+.mic-btn.listening{background:rgba(255,34,68,.2);border-color:var(--red);animation:pdot 1s infinite}
+.voice-hint{font-family:var(--font-mono);font-size:.68rem;color:var(--dim);min-height:1.1em}
+.intent-row{font-family:var(--font-mono);font-size:.71rem;color:#6a84a0;line-height:1.5;border-top:1px solid var(--border);padding-top:8px;display:none}
+.intent-row.on{display:block}
+
+/* ─── QUEUE ─── */
+.queue-section{padding:11px 12px;flex:1;display:flex;flex-direction:column;gap:7px}
+.queue-active{padding:6px 9px;background:rgba(0,207,255,.04);border:1px solid var(--cyan-dim);border-radius:2px;font-size:.78rem;font-family:var(--font-mono)}
+.queue-list{list-style:none;display:flex;flex-direction:column;gap:4px;max-height:90px;overflow-y:auto}
+.queue-list li{padding:4px 9px;background:rgba(255,255,255,.025);border-left:2px solid var(--border);font-size:.76rem;font-family:var(--font-mono)}
+.queue-paused{color:var(--amber);font-size:.73rem;font-family:var(--font-mono);display:none}
+.queue-paused.on{display:block}
+.btn-clear{width:100%;padding:6px;background:rgba(80,20,80,.25);color:#c080d0;border:1px solid #3a1050;border-radius:3px;font-family:var(--font-ui);font-weight:600;font-size:.76rem;letter-spacing:1px;cursor:pointer;transition:background .15s;margin-top:auto}
+.btn-clear:hover{background:rgba(130,30,130,.35)}
+
+/* ─── MISSION BUTTONS ─── */
+.mission-row{padding:11px 12px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1.8fr;gap:9px}
+@media(max-width:900px){.mission-row{grid-template-columns:1fr 1fr}.btn-estop{grid-column:1/-1}}
+.mbtn{padding:14px 7px;border:1px solid;border-radius:2px;font-family:var(--font-ui);font-weight:700;font-size:.82rem;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;transition:filter .15s,transform .1s;display:flex;flex-direction:column;align-items:center;gap:3px;line-height:1.3;width:100%}
+.mbtn:hover{filter:brightness(1.3)}.mbtn:active{transform:scale(.97)}
+.mbtn .sub{font-size:.6rem;opacity:.65;font-weight:400;letter-spacing:0}
+.btn-g{background:rgba(0,70,35,.35);border-color:#004a25;color:var(--green)}
+.btn-o{background:rgba(70,35,0,.35);border-color:#4a2500;color:var(--amber)}
+.btn-b{background:rgba(0,35,70,.35);border-color:#002a50;color:#60b0ff}
+.btn-p{background:rgba(55,20,75,.35);border-color:#3a1055;color:#c080ff}
+.btn-estop{background:rgba(130,0,18,.25);border-color:rgba(255,34,68,.4);color:var(--red);letter-spacing:1.5px;font-size:.85rem;box-shadow:0 0 18px rgba(255,34,68,.08)}
+.btn-estop:hover{background:rgba(180,0,25,.4);box-shadow:0 0 28px rgba(255,34,68,.25)}
+
+/* ─── REPORT ─── */
+.report-body{padding:13px}
+.report-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.report-badge{padding:2px 9px;border-radius:999px;font-family:var(--font-mono);font-size:.66rem;letter-spacing:1px;background:var(--border);color:var(--dim)}
+.report-badge.running{background:rgba(0,55,20,.5);color:var(--green)}
+.report-badge.done{background:rgba(0,60,20,.8);color:var(--green)}
+.report-badge.done_no_llm{background:rgba(75,55,0,.5);color:var(--amber)}
+.report-badge.error{background:rgba(75,0,10,.5);color:var(--red)}
+.report-msg{font-family:var(--font-mono);font-size:.76rem;color:var(--dim);margin-bottom:9px}
+.report-links a{color:var(--cyan);font-family:var(--font-mono);font-size:.73rem;text-decoration:none;margin-right:14px}
 .report-links a:hover{text-decoration:underline}
-.report-map{margin:10px 0}
-.report-map img{width:100%;border-radius:6px;background:#fff}
-.md{font-size:.86rem;line-height:1.55;color:#dfe5f7}
-.md h1,.md h2,.md h3{color:#cfe1ff;margin:10px 0 6px;line-height:1.3}
-.md h1{font-size:1.05rem;border-bottom:1px solid #2a3158;padding-bottom:4px}
-.md h2{font-size:.98rem}
-.md h3{font-size:.9rem}
-.md p{margin:6px 0}
-.md ul,.md ol{margin:6px 0 6px 22px}
-.md li{margin:2px 0}
-.md code{background:#1b1b2e;padding:1px 5px;border-radius:4px;font-size:.82rem}
-.md table{border-collapse:collapse;margin:8px 0;font-size:.78rem;width:100%}
-.md th,.md td{border:1px solid #2a3158;padding:4px 6px;text-align:left}
-.md th{background:#1a2245;color:#cfe1ff}
-.md strong{color:#fff}
-.md details{margin:10px 0;background:#11121f;border:1px solid #2a3158;border-radius:6px;padding:8px 10px}
-.md details summary{cursor:pointer;color:#cfe1ff;font-weight:bold}
-.report-empty{font-size:.82rem;color:#7f89a8;font-style:italic}
+.report-map img{width:100%;border-radius:3px;margin:9px 0}
+.report-empty{font-family:var(--font-mono);font-size:.78rem;color:var(--dim);font-style:italic}
+.md{font-size:.82rem;line-height:1.6;color:var(--text)}
+.md h1,.md h2,.md h3{color:var(--cyan);margin:9px 0 4px}
+.md h1{font-size:.98rem;border-bottom:1px solid var(--border);padding-bottom:4px}
+.md h2{font-size:.9rem}.md h3{font-size:.83rem}
+.md p{margin:5px 0}.md ul,.md ol{margin:5px 0 5px 20px}.md li{margin:2px 0}
+.md code{background:#0a1020;padding:1px 4px;border-radius:3px;font-family:var(--font-mono);font-size:.78rem}
+.md table{border-collapse:collapse;margin:7px 0;font-size:.76rem;width:100%}
+.md th,.md td{border:1px solid var(--border);padding:3px 7px}
+.md th{background:#0a1828;color:var(--cyan)}.md strong{color:#fff}
+.md details{margin:9px 0;background:#07101e;border:1px solid var(--border);border-radius:3px;padding:7px 11px}
+.md details summary{cursor:pointer;color:var(--cyan);font-weight:700}
 </style>
 </head>
 <body>
-<h1>Wind Tower — Mission Control</h1>
 
-<div class="bar-wrap">
-  <div id="battery-fill" class="bar-fill" style="width:{{ s.battery }}%;
-    background:{{'#1a6b30' if s.battery>50 else ('#9a6200' if s.battery>20 else '#7b1a1a')}}">
-    Bateria <span id="battery-value">{{ s.battery }}</span>%
+<header class="topbar">
+  <div class="logo">WTIS<span> / Wind Tower Inspection System</span></div>
+  <div class="topbar-spacer"></div>
+  <div class="status-pill"><div id="sys-dot" class="pulse-dot"></div><span id="sys-label" style="color:var(--green)">ONLINE</span></div>
+  <div class="status-pill" style="gap:5px">
+    <!-- Inline SVG battery icon with animated fill level -->
+    <svg id="batt-svg" width="38" height="18" viewBox="0 0 38 18" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+      <!-- Body outline -->
+      <rect x="1" y="3" width="32" height="12" rx="2" ry="2" stroke="var(--border)" stroke-width="1.5" fill="#020608"/>
+      <!-- Positive terminal nub -->
+      <rect x="33" y="7" width="4" height="4" rx="1" fill="var(--border)"/>
+      <!-- Fill bar (width driven by JS, 0-30px range) -->
+      <rect id="batt-fill-rect" x="2.5" y="4.5" width="0" height="9" rx="1" fill="var(--green)" style="transition:width .6s,fill .6s"/>
+    </svg>
+    <span style="font-family:var(--font-mono);font-size:.76rem"><span id="batt-pct">{{ s.battery }}</span>%</span>
   </div>
+  <div class="status-pill" style="max-width:340px;overflow:hidden">
+    <span id="topbar-status" style="font-family:var(--font-mono);font-size:.72rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ s.status }}</span>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- ── VIZ ROW ── -->
+  <div class="viz-row">
+
+    <div class="panel">
+      <div class="panel-hd">
+        <span class="panel-title">3D Viewer</span>
+        <span class="panel-sub">Husky A200 + UR5e + VLP-16</span>
+      </div>
+      <div class="panel-body">
+        <canvas id="robot-canvas"></canvas>
+        <div class="pc-overlay">LiDAR pts: <span id="pc-pts">—</span><br>Yaw: <span id="ov-yaw">—</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <div id="cam-dot" class="cam-dot"></div>
+        <span class="panel-title">Camara Inspección</span>
+        <a href="/api/snapshot" target="_blank" class="panel-sub" style="color:var(--dim);text-decoration:none" title="Snapshot">⬡</a>
+      </div>
+      <div class="panel-body">
+        <img id="camera-feed" class="cam-feed" src="/video_feed" alt="Sin señal"
+             onerror="this._t=setTimeout(()=>{this.src='/video_feed?t='+Date.now()},2000)">
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-hd">
+        <span class="panel-title">Mapa de Misión</span>
+        <span id="map-pose" class="panel-sub">x:— y:—</span>
+      </div>
+      <div class="panel-body">
+        <canvas id="map-canvas"></canvas>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── CTRL ROW ── -->
+  <div class="ctrl-row">
+
+    <div class="panel" style="min-height:200px">
+      <div class="panel-hd">
+        <span class="panel-title">Estado del Sistema</span>
+        <span id="dest-badge" class="panel-sub">idle</span>
+      </div>
+      <div class="data-grid">
+        <div class="data-cell"><span class="data-label">Pose X</span><span class="data-value" id="pose-x">—</span></div>
+        <div class="data-cell"><span class="data-label">Pose Y</span><span class="data-value" id="pose-y">—</span></div>
+        <div class="data-cell"><span class="data-label">IMU Roll</span><span class="data-value" id="imu-roll">—</span></div>
+        <div class="data-cell"><span class="data-label">IMU Pitch</span><span class="data-value" id="imu-pitch">—</span></div>
+        <div class="data-cell" style="grid-column:1/-1"><span class="data-label">Yaw</span><span class="data-value" id="pose-yaw">—</span></div>
+      </div>
+      <div id="alarm-bar" class="alarm-bar"></div>
+      <div id="status-readout" class="status-readout">{{ s.status }}</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px">
+
+      <div class="panel" style="flex:0 0 auto">
+        <div class="panel-hd"><span class="panel-title">Comando de Misión</span></div>
+        <div class="cmd-section">
+          <div class="cmd-row">
+            <input id="cmd-input" class="cmd-input" type="text" placeholder="ve a mantenimiento…" autocomplete="off">
+            <button id="mic-btn" class="mic-btn" type="button" title="Voz">🎙</button>
+            <button id="cmd-send" class="btn-sm">ENVIAR</button>
+          </div>
+          <div id="voice-hint" class="voice-hint"></div>
+          <div id="intent-row" class="intent-row"></div>
+        </div>
+      </div>
+
+      <div class="panel" style="flex:1">
+        <div class="panel-hd">
+          <span class="panel-title">Cola de Misiones</span>
+          <span id="queue-badge" class="panel-sub">0 pendientes</span>
+        </div>
+        <div class="queue-section">
+          <div id="queue-active" class="queue-active">Sin misión activa</div>
+          <ul id="queue-list" class="queue-list"></ul>
+          <div id="queue-paused" class="queue-paused">⚠ Cola pausada por fallo</div>
+          <form method="post" action="/clear_queue">
+            <button class="btn-clear" type="submit">VACIAR COLA</button>
+          </form>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── MISSION BUTTONS ── -->
+  <div class="panel" style="padding:0">
+    <div class="panel-hd"><span class="panel-title">Control de Misiones</span></div>
+    <div class="mission-row">
+      <form method="post" action="/cmd" style="display:contents">
+        <button class="mbtn btn-g" name="cmd" value="charging_station">⚡ CARGA<span class="sub">Estación norte</span></button>
+      </form>
+      <form method="post" action="/cmd" style="display:contents">
+        <button class="mbtn btn-o" name="cmd" value="maintenance_station"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:3px"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> MANT.<span class="sub">Via gate der.</span></button>
+      </form>
+      <form method="post" action="/cmd" style="display:contents">
+        <button class="mbtn btn-b" name="cmd" value="home_inspection">⌂ HOME<span class="sub">Base rampa</span></button>
+      </form>
+      <form method="post" action="/cmd" style="display:contents">
+        <button class="mbtn btn-p" name="cmd" value="start_inspection">🔍 INSP.<span class="sub">Tramo completo</span></button>
+      </form>
+      <form method="post" action="/cancel" style="display:contents">
+        <button class="mbtn btn-estop" type="submit">⚠ E-STOP — CANCELAR</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ── INSPECTION REPORT ── -->
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-title">Informe de Inspección</span>
+      <span id="report-badge" class="report-badge panel-sub">SIN DATOS</span>
+    </div>
+    <div class="report-body">
+      <div id="report-msg" class="report-msg"></div>
+      <div id="report-links" class="report-links"></div>
+      <div id="report-map" style="display:none"><img id="report-map-img" alt="Mapa defectos"></div>
+      <div id="report-summary" class="md"></div>
+      <div id="report-full" class="md"></div>
+      <div id="report-empty" class="report-empty">Aún no hay informe. Se generará automáticamente al terminar una inspección.</div>
+    </div>
+  </div>
+
 </div>
 
-<div id="status-box" class="status">
-  <b>Estado:</b> <span id="status-text">{{ s.status }}</span><br>
-  <b>Destino activo:</b> <span id="destination-text">{{ s.destination }}</span>
-  <span id="charging-line">{% if s.charging %}<br><span class="ok">&#9889; CARGANDO</span>{% endif %}</span>
-  <span id="moving-line">{% if s.moving %}<br>&#8658; En movimiento{% endif %}</span>
-</div>
-
-<div id="alarm-box" class="alarm" style="{% if not s.alarm %}display:none{% endif %}">
-  <b>ALARMA:</b> <span id="error-state">{{ s.error_state }}</span><br>
-  <span id="alarm-text">{{ s.alarm }}</span>
-</div>
-
-<form id="text-command-form" class="text-box" method="post" action="/text_cmd">
-  <div class="text-row">
-    <input id="text-command-input" name="text" type="text" placeholder="ve a mantenimiento" autocomplete="off">
-    <button id="mic-btn" class="mic-btn" type="button" title="Hablar comando (Web Speech API)">&#127908;</button>
-    <button type="submit">Enviar</button>
-  </div>
-  <div id="voice-status" class="voice-status"></div>
-  <div id="intent-box" class="intent" style="{% if not s.last_text_command %}display:none{% endif %}">
-    "<span id="last-text-command">{{ s.last_text_command }}</span>" ->
-    <span id="last-llm-command">{{ s.last_llm_command }}</span>
-    (<span id="last-llm-source">{{ s.last_llm_source }}</span>,
-    conf <span id="last-llm-confidence">{{ s.last_llm_confidence }}</span>)<br>
-    <span id="last-llm-reason">{{ s.last_llm_reason }}</span>
-  </div>
-</form>
-
-<div class="queue">
-  <h2>Cola de misiones</h2>
-  <div id="queue-active">
-    {% if s.queue_active %}
-      <div><b>Activo:</b> {{ s.queue_active.label }}</div>
-    {% else %}
-      <div class="empty">Sin mision activa</div>
-    {% endif %}
-  </div>
-  <div id="queue-pending">
-    {% if s.queue_pending %}
-      <ol>
-      {% for item in s.queue_pending %}
-        <li>{{ item.label }}{% if item.source_text %} - "{{ item.source_text }}"{% endif %}</li>
-      {% endfor %}
-      </ol>
-    {% else %}
-      <div class="empty">Sin comandos pendientes</div>
-    {% endif %}
-  </div>
-  <div id="queue-paused" class="paused" style="{% if not s.queue_paused %}display:none{% endif %}">
-    Cola pausada por E-STOP o fallo
-  </div>
-  <form method="post" action="/clear_queue">
-    <button class="queue-clear" type="submit">Vaciar cola</button>
-  </form>
-</div>
-
-<div class="grid">
-  <form method="post" action="/cmd">
-    <button class="btn g" name="cmd" value="charging_station">
-      Estacion de Carga
-      <span class="sub">Habitacion norte</span>
-    </button>
-  </form>
-  <form method="post" action="/cmd">
-    <button class="btn o" name="cmd" value="maintenance_station">
-      Mantenimiento
-      <span class="sub">Via gate derecho</span>
-    </button>
-  </form>
-  <form method="post" action="/cmd">
-    <button class="btn b" name="cmd" value="home_inspection">
-      Home Inspeccion
-      <span class="sub">Base de la rampa</span>
-    </button>
-  </form>
-  <form method="post" action="/cmd">
-    <button class="btn p" name="cmd" value="start_inspection">
-      Iniciar Inspeccion
-      <span class="sub">Recorre el tramo completo</span>
-    </button>
-  </form>
-  <form method="post" action="/cancel" style="grid-column:1/-1">
-    <button class="btn r" type="submit">
-      E-STOP — CANCELAR RUTA
-    </button>
-  </form>
-</div>
-
-<div class="report">
-  <div class="report-head">
-    <h2>Resumen de inspección</h2>
-    <span id="report-status" class="report-status idle">sin datos</span>
-  </div>
-  <div id="report-run" class="report-message"></div>
-  <div id="report-message" class="report-message"></div>
-  <div id="report-links" class="report-links"></div>
-  <div id="report-map" class="report-map" style="display:none">
-    <img id="report-map-img" alt="Mapa de defectos">
-  </div>
-  <div id="report-summary" class="md"></div>
-  <div id="report-full" class="md"></div>
-  <div id="report-empty" class="report-empty">
-    Aún no hay informe. Se generará automáticamente al terminar una inspección.
-  </div>
-</div>
-
-<script>
-function esc(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }[ch]));
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.module.js",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.150.1/examples/jsm/"
+  }
 }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { ColladaLoader } from 'three/examples/jsm/loaders/ColladaLoader.js';
+import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.1/src/URDFLoader.js';
 
-function batteryColor(value) {
-  if (value > 50) return '#1a6b30';
-  if (value > 20) return '#9a6200';
-  return '#7b1a1a';
-}
+// ═══════════════════════════════════════════════════════
+//  THREE.JS ROBOT VIEWER — carga URDF real, fallback simplificado
+// ═══════════════════════════════════════════════════════
+(function () {
+  const canvas = document.getElementById('robot-canvas');
+  const wrap = canvas.parentElement;
 
-function renderQueue(state) {
-  const active = document.getElementById('queue-active');
-  const pending = document.getElementById('queue-pending');
-  const paused = document.getElementById('queue-paused');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.setClearColor(0x040910);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.3;
 
-  if (state.queue_active) {
-    active.innerHTML = `<div><b>Activo:</b> ${esc(state.queue_active.label)}</div>`;
-  } else {
-    active.innerHTML = '<div class="empty">Sin mision activa</div>';
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(0x040910, 14, 32);
+
+  const cam = new THREE.PerspectiveCamera(44, 1, 0.01, 80);
+  cam.position.set(3.2, 2.4, 3.2);
+
+  const controls = new OrbitControls(cam, canvas);
+  controls.enableDamping = true; controls.dampingFactor = 0.08;
+  controls.minDistance = 0.8; controls.maxDistance = 10;
+  controls.target.set(0, 0.25, 0);
+
+  scene.add(new THREE.AmbientLight(0x0d1c2e, 1.5));
+  const dir = new THREE.DirectionalLight(0x90c8ff, 2.8);
+  dir.position.set(4,6,3); dir.castShadow = true;
+  dir.shadow.mapSize.set(1024,1024); scene.add(dir);
+  scene.add(new THREE.HemisphereLight(0x001224, 0x050a14, 0.9));
+  const rim = new THREE.DirectionalLight(0x00cfff, 0.5);
+  rim.position.set(-3,2,-3); scene.add(rim);
+
+  scene.add(new THREE.GridHelper(22,22,0x0a2030,0x081525));
+  const gnd = new THREE.Mesh(new THREE.PlaneGeometry(30,30),
+    new THREE.MeshStandardMaterial({color:0x020609,roughness:1}));
+  gnd.rotation.x = -Math.PI/2; gnd.receiveShadow = true; scene.add(gnd);
+
+  // ── Modelo simplificado (fallback mientras carga el URDF) ──
+  const M = {
+    body: new THREE.MeshStandardMaterial({color:0x1a1a1a,roughness:.65,metalness:.45}),
+    wheel:new THREE.MeshStandardMaterial({color:0x080808,roughness:.9,metalness:.1}),
+    rim:  new THREE.MeshStandardMaterial({color:0x2a2a2a,roughness:.5,metalness:.65}),
+    arm:  new THREE.MeshStandardMaterial({color:0xd4a520,roughness:.35,metalness:.75,emissive:0x1a0800,emissiveIntensity:.2}),
+    sens: new THREE.MeshStandardMaterial({color:0x00cfff,roughness:.15,metalness:.85,emissive:0x004466,emissiveIntensity:.9}),
+    dark: new THREE.MeshStandardMaterial({color:0x111111,roughness:.6,metalness:.5}),
+    glow: new THREE.MeshStandardMaterial({color:0x00cfff,emissive:0x00cfff,emissiveIntensity:1,transparent:true,opacity:.55}),
+  };
+  const fallback = new THREE.Group(); scene.add(fallback);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(.99,.28,.57),M.body);
+  body.position.y=.305; body.castShadow=true; fallback.add(body);
+  const deck= new THREE.Mesh(new THREE.BoxGeometry(.88,.04,.50),M.dark);
+  deck.position.y=.465; fallback.add(deck);
+  const wheels=[]; [[.256,.165,.34],[.256,.165,-.34],[-.256,.165,.34],[-.256,.165,-.34]].forEach(([x,y,z])=>{
+    const w=new THREE.Mesh(new THREE.CylinderGeometry(.165,.165,.09,24),M.wheel);
+    w.rotation.z=Math.PI/2; w.position.set(x,y,z); w.castShadow=true; fallback.add(w); wheels.push(w);
+    const r=new THREE.Mesh(new THREE.TorusGeometry(.12,.014,8,24),M.rim);
+    r.position.set(x,y,z); r.rotation.x=Math.PI/2; fallback.add(r);
+  });
+  const armBase=new THREE.Group(); armBase.position.set(.15,.49,0); fallback.add(armBase);
+  const link1=new THREE.Group(); armBase.add(link1);
+  const l1m=new THREE.Mesh(new THREE.BoxGeometry(.06,.24,.06),M.arm); l1m.position.y=.12; link1.add(l1m);
+  const link2=new THREE.Group(); link2.position.y=.24; link1.add(link2);
+  const l2m=new THREE.Mesh(new THREE.BoxGeometry(.22,.05,.05),M.arm); l2m.position.x=.11; link2.add(l2m);
+  const link3=new THREE.Group(); link3.position.x=.22; link2.add(link3);
+  const l3m=new THREE.Mesh(new THREE.BoxGeometry(.18,.05,.05),M.arm);
+  l3m.position.set(.09,0,0);
+  link3.add(l3m);
+  const vlpH=new THREE.Mesh(new THREE.CylinderGeometry(.035,.04,.06,20),M.sens);
+  vlpH.position.set(-.25,.505,0); fallback.add(vlpH);
+  const vlpR=new THREE.Mesh(new THREE.TorusGeometry(.035,.003,8,24),M.glow);
+  vlpR.rotation.x=Math.PI/2; vlpR.position.set(-.25,.509,0); fallback.add(vlpR);
+
+  // ── URDF real desde /api/robot_description ──
+  let urdfRobot = null;
+  let urdfLoaded = false;
+  const badge = document.getElementById('pc-count');
+
+  function tryLoadURDF() {
+    fetch('/api/robot_description', {cache:'no-store'})
+      .then(r => { if (!r.ok) throw new Error('no urdf'); return r.text(); })
+      .then(urdfText => {
+        const loader = new URDFLoader();
+        // Resuelve package://pkg/path → /api/mesh/pkg/path
+        loader.packages = pkg => `/api/mesh/${pkg}`;
+        // Usa STLLoader y ColladaLoader para los meshes
+        loader.loadMeshCb = (path, manager, onLoad) => {
+          const ext = path.split('.').pop().toLowerCase();
+          if (ext === 'stl') {
+            new STLLoader(manager).load(path, geom => {
+              const mesh = new THREE.Mesh(geom,
+                new THREE.MeshStandardMaterial({color:0x888888,roughness:.6,metalness:.4}));
+              onLoad(mesh);
+            }, undefined, () => onLoad(null));
+          } else if (ext === 'dae') {
+            new ColladaLoader(manager).load(path, result => {
+              onLoad(result.scene);
+            }, undefined, () => onLoad(null));
+          } else {
+            onLoad(null);
+          }
+        };
+        const robot = loader.parse(urdfText);
+        robot.rotation.x = -Math.PI / 2; // Roll -90 deg: URDF upright vs point cloud frame
+        robot.rotation.z = Math.PI;      // ROS → Three.js frame
+        scene.add(robot);
+        urdfRobot = robot;
+        urdfLoaded = true;
+        fallback.visible = false;
+        if (badge) badge.textContent = 'URDF real cargado';
+      })
+      .catch(err => {
+        console.warn('No se pudo cargar URDF real; se mantiene fallback 3D.', err);
+        // Sigue mostrando fallback, reintenta en 5s
+        setTimeout(tryLoadURDF, 5000);
+      });
+  }
+  tryLoadURDF();
+
+  // ── Point cloud ──
+  const MAX_PC=800;
+  const pcGeo=new THREE.BufferGeometry();
+  const pcPos=new Float32Array(MAX_PC*3),pcCol=new Float32Array(MAX_PC*3);
+  pcGeo.setAttribute('position',new THREE.BufferAttribute(pcPos,3));
+  pcGeo.setAttribute('color',new THREE.BufferAttribute(pcCol,3));
+  pcGeo.setDrawRange(0,0);
+  const pcMesh=new THREE.Points(pcGeo,
+    new THREE.PointsMaterial({size:.045,vertexColors:true,transparent:true,opacity:.75}));
+  pcMesh.position.set(-.25,.505,0); scene.add(pcMesh);
+
+  let isMoving=false, armT=0;
+
+  window._updateRobot3D = function(s) {
+    isMoving = !!s.moving;
+    const yaw = s.robot_yaw || 0;
+    // Keep the viewer in the Husky base frame: the robot body stays fixed and
+    // only local sensor data, wheels and articulated parts update.
+    document.getElementById('ov-yaw').textContent = (yaw*180/Math.PI).toFixed(1)+'°';
+    // Actualiza joints del URDF si están disponibles (ruedas)
+    if (urdfRobot && isMoving) {
+      const speed = armT * 8;
+      ['front_left_wheel','front_right_wheel','rear_left_wheel','rear_right_wheel'].forEach(n => {
+        const j = urdfRobot.joints[n];
+        if (j) j.setJointValue(speed);
+      });
+    }
+  };
+
+  window._updatePC = function(pts) {
+    const n=Math.min(pts.length,MAX_PC);
+    document.getElementById('pc-pts').textContent=pts.length;
+    for(let i=0;i<n;i++){
+      const[x,y,z]=pts[i];
+      pcPos[i*3]=x;pcPos[i*3+1]=z;pcPos[i*3+2]=-y;
+      const t=Math.max(0,Math.min(1,(z+.3)/2));
+      pcCol[i*3]=t*.2;pcCol[i*3+1]=.45+t*.55;pcCol[i*3+2]=1;
+    }
+    pcGeo.attributes.position.needsUpdate=true;
+    pcGeo.attributes.color.needsUpdate=true;
+    pcGeo.setDrawRange(0,n);
+  };
+
+  function resize(){
+    const w=wrap.clientWidth,h=wrap.clientHeight;
+    cam.aspect=w/h; cam.updateProjectionMatrix(); renderer.setSize(w,h);
+  }
+  resize(); new ResizeObserver(resize).observe(wrap);
+
+  let prev=performance.now();
+  (function animate(){
+    requestAnimationFrame(animate);
+    const dt=(performance.now()-prev)/1000; prev=performance.now();
+    armT+=dt;
+    if(!urdfLoaded){
+      if(isMoving)wheels.forEach(w=>{w.rotation.y+=dt*9;});
+      link1.rotation.y=Math.sin(armT*.38)*.28;
+      link2.rotation.z=-.4+Math.sin(armT*.52+1)*.13;
+      link3.rotation.z=-.28+Math.sin(armT*.31+2)*.09;
+    }
+    vlpH.rotation.y+=dt*3.5; vlpR.rotation.y+=dt*3.5;
+    controls.update(); renderer.render(scene,cam);
+  })();
+})();
+
+// ═══════════════════════════════════════════════════════
+//  2D MAP CANVAS
+// ═══════════════════════════════════════════════════════
+(function () {
+  const canvas = document.getElementById('map-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = {xMin:-16,xMax:16,yMin:-3,yMax:44};
+  let rState = {x:0,y:0,yaw:0,moving:false,alarm:false,inspActive:false,inspIdx:0,inspCount:0};
+
+  function resize() {
+    const s = devicePixelRatio;
+    canvas.width  = canvas.offsetWidth  * s;
+    canvas.height = canvas.offsetHeight * s;
+    ctx.setTransform(s,0,0,s,0,0);
+  }
+  new ResizeObserver(()=>{resize();draw();}).observe(canvas);
+  resize();
+
+  function toC(wx,wy) {
+    const cw=canvas.offsetWidth, ch=canvas.offsetHeight;
+    return [((wx-W.xMin)/(W.xMax-W.xMin))*cw, ch-((wy-W.yMin)/(W.yMax-W.yMin))*ch];
   }
 
-  if (state.queue_pending && state.queue_pending.length) {
-    pending.innerHTML = '<ol>' + state.queue_pending.map((item) => {
-      const source = item.source_text ? ` - "${esc(item.source_text)}"` : '';
-      return `<li>${esc(item.label)}${source}</li>`;
-    }).join('') + '</ol>';
-  } else {
-    pending.innerHTML = '<div class="empty">Sin comandos pendientes</div>';
+  function draw() {
+    const cw=canvas.offsetWidth, ch=canvas.offsetHeight;
+    ctx.clearRect(0,0,cw,ch);
+    ctx.fillStyle='#040910'; ctx.fillRect(0,0,cw,ch);
+
+    // Grid 5m
+    ctx.strokeStyle='#0a1c2c'; ctx.lineWidth=.5;
+    for(let x=-15;x<=15;x+=5){const[cx]=toC(x,0);ctx.beginPath();ctx.moveTo(cx,0);ctx.lineTo(cx,ch);ctx.stroke();}
+    for(let y=0;y<=40;y+=5){const[,cy]=toC(0,y);ctx.beginPath();ctx.moveTo(0,cy);ctx.lineTo(cw,cy);ctx.stroke();}
+
+    // Tube zone
+    ctx.fillStyle='rgba(0,100,80,.055)';ctx.strokeStyle='rgba(0,150,100,.12)';ctx.lineWidth=1;
+    const[tx1,ty1]=toC(-2,6),[tx2,ty2]=toC(2.5,41);
+    ctx.fillRect(tx1,ty2,tx2-tx1,ty1-ty2);ctx.strokeRect(tx1,ty2,tx2-tx1,ty1-ty2);
+
+    // Inspection route
+    const[isx,isy]=toC(.245,10.246),[iex,iey]=toC(.245,39.579);
+    ctx.strokeStyle='#00cfff';ctx.lineWidth=2;ctx.setLineDash([5,4]);
+    ctx.beginPath();ctx.moveTo(isx,isy);ctx.lineTo(iex,iey);ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Inspection progress overlay
+    if(rState.inspActive && rState.inspCount>0){
+      const pct=rState.inspIdx/rState.inspCount;
+      const py=10.246+(39.579-10.246)*pct;
+      const[px,ppyC]=toC(.245,py);
+      ctx.strokeStyle='rgba(0,232,122,.6)';ctx.lineWidth=3;
+      ctx.beginPath();ctx.moveTo(isx,isy);ctx.lineTo(px,ppyC);ctx.stroke();
+    }
+
+    // Endpoint dots
+    [[.245,10.246,'#00cfff','INICIO'],[.245,39.579,'#00cfff','FIN']].forEach(([wx,wy,c,l])=>{
+      const[cx,cy]=toC(wx,wy);
+      ctx.fillStyle=c;ctx.beginPath();ctx.arc(cx,cy,4,0,Math.PI*2);ctx.fill();
+      ctx.font='9px "Share Tech Mono"';ctx.fillStyle=c;ctx.fillText(l,cx+6,cy+3);
+    });
+
+    // Gates
+    [[12.015,5.035,'#ffcc00','GR'],[-12.078,5.698,'#ffcc00','GL'],[.245,8.5,'#ff9900','PG']].forEach(([wx,wy,c,l])=>{
+      const[cx,cy]=toC(wx,wy);
+      ctx.strokeStyle=c;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(cx-5,cy);ctx.lineTo(cx+5,cy);ctx.moveTo(cx,cy-5);ctx.lineTo(cx,cy+5);ctx.stroke();
+      ctx.fillStyle=c;ctx.font='8px "Share Tech Mono"';ctx.fillText(l,cx+6,cy-2);
+    });
+
+    // Robot
+    const[rx,ry]=toC(rState.x,rState.y);
+    const col=rState.alarm?'#ff2244':(rState.moving?'#00e87a':'#00cfff');
+    ctx.strokeStyle='rgba(0,207,255,.12)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.arc(rx,ry,15,0,Math.PI*2);ctx.stroke();
+    ctx.save();ctx.translate(rx,ry);ctx.rotate(Math.PI/2-rState.yaw);
+    ctx.fillStyle=col;ctx.shadowColor=col;ctx.shadowBlur=10;
+    ctx.beginPath();ctx.moveTo(0,-10);ctx.lineTo(7,5);ctx.lineTo(0,1);ctx.lineTo(-7,5);ctx.closePath();ctx.fill();
+    ctx.restore();
+    ctx.fillStyle=col;ctx.font='bold 8px "Share Tech Mono"';
+    ctx.fillText(`(${rState.x.toFixed(1)},${rState.y.toFixed(1)})`,rx+12,ry);
+
+    // Scale bar
+    const sp=5*(cw/(W.xMax-W.xMin));
+    ctx.strokeStyle='rgba(180,180,180,.25)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(12,ch-13);ctx.lineTo(12+sp,ch-13);ctx.stroke();
+    ctx.fillStyle='rgba(180,180,180,.4)';ctx.font='8px "Share Tech Mono"';ctx.fillText('5m',14+sp,ch-9);
+    ctx.fillStyle='rgba(0,207,255,.4)';ctx.fillText('N↑',cw-22,18);
   }
 
-  paused.style.display = state.queue_paused ? 'block' : 'none';
-}
+  window._updateMap = function(s) {
+    rState={x:s.robot_x||0,y:s.robot_y||0,yaw:s.robot_yaw||0,moving:!!s.moving,alarm:!!s.alarm,
+            inspActive:!!s.inspection_active,inspIdx:s.inspection_index||0,inspCount:s.inspection_count||0};
+    document.getElementById('map-pose').textContent=`x:${rState.x.toFixed(2)} y:${rState.y.toFixed(2)}`;
+    draw();
+  };
+  draw();
+})();
 
-// ── Minimal Markdown -> HTML (headings, bold/italic, lists, tables, code) ──
-function renderMarkdown(src) {
-  if (!src) return '';
-  const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
-  const out = [];
-  let i = 0;
-  const inlineFmt = (s) => esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  while (i < lines.length) {
-    let line = lines[i];
-    if (!line.trim()) { i++; continue; }
-    // Heading
-    const h = line.match(/^(#{1,6})\s+(.*)$/);
-    if (h) {
-      const lvl = Math.min(h[1].length, 3);
-      out.push(`<h${lvl}>${inlineFmt(h[2].trim())}</h${lvl}>`);
-      i++;
+// ═══════════════════════════════════════════════════════
+//  STATE POLLING & UI
+// ═══════════════════════════════════════════════════════
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function battCol(v){return v>50?'#00e87a':v>20?'#ff6b00':'#ff2244';}
+
+const RL={idle:'SIN DATOS',running:'GENERANDO',done:'COMPLETO',done_no_llm:'PARCIAL',error:'ERROR'};
+
+function renderMd(src){
+  if(!src)return'';
+  const lines=String(src).replace(/\r\n?/g,'\n').split('\n'),out=[];let i=0;
+  const fmt=s=>esc(s).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/(^|[\s(])\*([^*\n]+)\*/g,'$1<em>$2</em>');
+  while(i<lines.length){
+    const l=lines[i];
+    if(!l.trim()){i++;continue;}
+    const h=l.match(/^(#{1,6})\s+(.*)/);
+    if(h){const lv=Math.min(h[1].length,3);out.push(`<h${lv}>${fmt(h[2])}</h${lv}>`);i++;continue;}
+    if(l.includes('|')&&i+1<lines.length&&/^\s*\|?[-: |]+\|/.test(lines[i+1])){
+      const sr=r=>r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(c=>c.trim());
+      const hdrs=sr(l);i+=2;const rows=[];
+      while(i<lines.length&&lines[i].includes('|'))rows.push(sr(lines[i++]));
+      out.push(`<table><thead><tr>${hdrs.map(c=>`<th>${fmt(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${fmt(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
       continue;
     }
-    // Table (line with |, next line is separator)
-    if (line.includes('|') && i + 1 < lines.length && /^\s*\|?[-: |]+\|[-: |]+/.test(lines[i + 1])) {
-      const splitRow = (row) => row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
-      const headers = splitRow(line);
-      i += 2;
-      const rows = [];
-      while (i < lines.length && lines[i].includes('|')) {
-        rows.push(splitRow(lines[i]));
-        i++;
-      }
-      const th = headers.map((c) => `<th>${inlineFmt(c)}</th>`).join('');
-      const trs = rows.map((r) => '<tr>' + r.map((c) => `<td>${inlineFmt(c)}</td>`).join('') + '</tr>').join('');
-      out.push(`<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`);
-      continue;
-    }
-    // Bullet list
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
-        items.push(`<li>${inlineFmt(lines[i].replace(/^\s*[-*]\s+/, ''))}</li>`);
-        i++;
-      }
-      out.push(`<ul>${items.join('')}</ul>`);
-      continue;
-    }
-    // Numbered list
-    if (/^\s*\d+\.\s+/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
-        items.push(`<li>${inlineFmt(lines[i].replace(/^\s*\d+\.\s+/, ''))}</li>`);
-        i++;
-      }
-      out.push(`<ol>${items.join('')}</ol>`);
-      continue;
-    }
-    // Paragraph
-    const para = [];
-    while (i < lines.length && lines[i].trim() && !/^(#{1,6})\s+/.test(lines[i]) && !/^\s*[-*]\s+/.test(lines[i]) && !/^\s*\d+\.\s+/.test(lines[i]) && !lines[i].includes('|')) {
-      para.push(lines[i]);
-      i++;
-    }
-    if (para.length) out.push(`<p>${inlineFmt(para.join(' '))}</p>`);
+    if(/^\s*[-*]\s+/.test(l)){const it=[];while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i]))it.push(`<li>${fmt(lines[i++].replace(/^\s*[-*]\s+/,''))}</li>`);out.push(`<ul>${it.join('')}</ul>`);continue;}
+    if(/^\s*\d+\.\s+/.test(l)){const it=[];while(i<lines.length&&/^\s*\d+\.\s+/.test(lines[i]))it.push(`<li>${fmt(lines[i++].replace(/^\s*\d+\.\s+/,''))}</li>`);out.push(`<ol>${it.join('')}</ol>`);continue;}
+    const p=[];while(i<lines.length&&lines[i].trim()&&!/^[#\-*\d]/.test(lines[i])&&!lines[i].includes('|'))p.push(lines[i++]);
+    if(p.length)out.push(`<p>${fmt(p.join(' '))}</p>`);
   }
   return out.join('\n');
 }
 
-const REPORT_STATUS_LABEL = {
-  idle: 'sin datos',
-  running: 'generando…',
-  done: 'completo',
-  done_no_llm: 'sin LLM',
-  error: 'error',
-};
+function renderState(s) {
+  const pct=Number(s.battery||0);
+  // Update inline SVG battery: fill rect max width = 29px (body interior 30px minus 1px margin)
+  const fillW=Math.round(Math.max(0,Math.min(100,pct))*0.29);
+  const fillEl=document.getElementById('batt-fill-rect');
+  if(fillEl){fillEl.setAttribute('width',fillW);fillEl.setAttribute('fill',battCol(pct));}
+  document.getElementById('batt-pct').textContent=pct.toFixed(1);
+  document.getElementById('topbar-status').textContent=s.status||'';
 
-function renderReport(report) {
-  const statusEl = document.getElementById('report-status');
-  const runEl = document.getElementById('report-run');
-  const msgEl = document.getElementById('report-message');
-  const linksEl = document.getElementById('report-links');
-  const mapWrap = document.getElementById('report-map');
-  const mapImg = document.getElementById('report-map-img');
-  const summaryEl = document.getElementById('report-summary');
-  const fullEl = document.getElementById('report-full');
-  const emptyEl = document.getElementById('report-empty');
+  const dot=document.getElementById('sys-dot'),lbl=document.getElementById('sys-label');
+  if(s.alarm){dot.className='pulse-dot err';lbl.style.color='var(--red)';lbl.textContent='ALARM';}
+  else if(s.moving||s.inspection_active){dot.className='pulse-dot';lbl.style.color='var(--green)';lbl.textContent='ACTIVE';}
+  else if(s.charging){dot.className='pulse-dot warn';lbl.style.color='var(--amber)';lbl.textContent='CHARGING';}
+  else{dot.className='pulse-dot';lbl.style.color='var(--green)';lbl.textContent='ONLINE';}
 
-  const r = report || {};
-  const status = r.status || 'idle';
-  statusEl.className = `report-status ${status}`;
-  statusEl.textContent = REPORT_STATUS_LABEL[status] || status;
+  document.getElementById('dest-badge').textContent=s.destination||'idle';
+  document.getElementById('status-readout').textContent=s.status||'';
+  document.getElementById('pose-x').textContent=s.robot_x!=null?s.robot_x.toFixed(3)+' m':'—';
+  document.getElementById('pose-y').textContent=s.robot_y!=null?s.robot_y.toFixed(3)+' m':'—';
+  document.getElementById('pose-yaw').textContent=s.robot_yaw!=null?((s.robot_yaw*180/Math.PI).toFixed(1))+'°':'—';
+  document.getElementById('imu-roll').textContent=s.imu_roll_deg!=null?s.imu_roll_deg.toFixed(1)+'°':'—';
+  document.getElementById('imu-pitch').textContent=s.imu_pitch_deg!=null?s.imu_pitch_deg.toFixed(1)+'°':'—';
 
-  if (status === 'idle') {
-    emptyEl.style.display = 'block';
-    runEl.textContent = '';
-    msgEl.textContent = '';
-    linksEl.innerHTML = '';
-    mapWrap.style.display = 'none';
-    summaryEl.innerHTML = '';
-    fullEl.innerHTML = '';
-    return;
-  }
-  emptyEl.style.display = 'none';
-  runEl.innerHTML = r.run_id ? `<b>Run:</b> ${esc(r.run_id)}` : '';
-  msgEl.textContent = r.message || '';
+  const ab=document.getElementById('alarm-bar');
+  if(s.alarm){ab.textContent=s.alarm;ab.classList.add('on');}else{ab.classList.remove('on');}
 
-  const links = [];
-  if (r.run_url) links.push(`<a href="${esc(r.run_url)}" target="_blank">carpeta del run</a>`);
-  if (r.defect_map_url) links.push(`<a href="${esc(r.defect_map_url)}" target="_blank">mapa de defectos</a>`);
-  linksEl.innerHTML = links.join('');
-
-  if (r.defect_map_url) {
-    mapImg.src = r.defect_map_url + `?t=${encodeURIComponent(r.run_id || '')}`;
-    mapWrap.style.display = 'block';
-  } else {
-    mapWrap.style.display = 'none';
-  }
-
-  summaryEl.innerHTML = r.summary_md ? renderMarkdown(r.summary_md) : '';
-  if (r.report_md) {
-    fullEl.innerHTML =
-      '<details open><summary>Informe completo (LLM)</summary>' +
-      renderMarkdown(r.report_md) +
-      '</details>';
-  } else {
-    fullEl.innerHTML = '';
-  }
-}
-
-function renderState(state) {
-  const battery = Number(state.battery || 0);
-  const fill = document.getElementById('battery-fill');
-  document.getElementById('battery-value').textContent = battery.toFixed(1);
-  fill.style.width = `${Math.max(0, Math.min(100, battery))}%`;
-  fill.style.background = batteryColor(battery);
-
-  document.getElementById('status-text').textContent = state.status || '';
-  document.getElementById('destination-text').textContent = state.destination || '';
-  document.getElementById('charging-line').innerHTML =
-    state.charging ? '<br><span class="ok">&#9889; CARGANDO</span>' : '';
-  document.getElementById('moving-line').innerHTML =
-    state.moving ? '<br>&#8658; En movimiento' : '';
-
-  const alarmBox = document.getElementById('alarm-box');
-  if (state.alarm) {
-    alarmBox.style.display = 'block';
-    document.getElementById('error-state').textContent = state.error_state || '';
-    document.getElementById('alarm-text').textContent = state.alarm || '';
-  } else {
-    alarmBox.style.display = 'none';
-  }
-
-  const intentBox = document.getElementById('intent-box');
-  if (state.last_text_command) {
-    intentBox.style.display = 'block';
-    document.getElementById('last-text-command').textContent = state.last_text_command;
-    document.getElementById('last-llm-command').textContent = state.last_llm_command || '';
-    document.getElementById('last-llm-source').textContent = state.last_llm_source || '';
-    document.getElementById('last-llm-confidence').textContent = state.last_llm_confidence ?? '';
-    document.getElementById('last-llm-reason').textContent = state.last_llm_reason || '';
-  } else {
-    intentBox.style.display = 'none';
-  }
-
-  renderQueue(state);
-  renderReport(state.report);
-}
-
-async function refreshState() {
-  try {
-    const response = await fetch('/api/state', {cache: 'no-store'});
-    if (response.ok) renderState(await response.json());
-  } catch (err) {
-    console.warn('No se pudo actualizar estado', err);
-  }
-}
-
-document.getElementById('text-command-form').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const input = document.getElementById('text-command-input');
-  const text = input.value.trim();
-  if (!text) return;
-  const form = new FormData();
-  form.append('text', text);
-  const response = await fetch('/text_cmd', {method: 'POST', body: form});
-  if (response.ok) {
-    input.value = '';
-    refreshState();
-  }
-});
-
-refreshState();
-setInterval(refreshState, 1000);
-
-// ── Web Speech API (voz por navegador) ───────────────────────────────────────
-(function () {
-  const micBtn = document.getElementById('mic-btn');
-  const input  = document.getElementById('text-command-input');
-  const voiceStatus = document.getElementById('voice-status');
-
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    micBtn.title = 'Web Speech API no soportada en este navegador (usa Chrome/Edge)';
-    micBtn.style.opacity = '0.35';
-    micBtn.style.cursor  = 'not-allowed';
-    return;
-  }
-
-  const recog = new SpeechRecognition();
-  recog.lang = 'es-ES';
-  recog.interimResults = true;
-  recog.continuous = false;
-  recog.maxAlternatives = 1;
-
-  let active = false;
-
-  micBtn.addEventListener('click', () => {
-    if (active) {
-      recog.stop();
-    } else {
-      input.value = '';
-      voiceStatus.textContent = 'Escuchando...';
-      recog.start();
-    }
+  const qa=document.getElementById('queue-active');
+  qa.textContent=s.queue_active?('▶ '+(s.queue_active.label||s.queue_active.command)):'Sin misión activa';
+  const ql=document.getElementById('queue-list');
+  ql.innerHTML='';
+  (s.queue_pending||[]).forEach((it,i)=>{
+    const li=document.createElement('li');
+    li.textContent=(i+1)+'. '+(it.label||it.command)+(it.source_text?` — "${it.source_text}"`:'')+
+      (it.confidence<1?' [conf:'+it.confidence+']':'');
+    ql.appendChild(li);
   });
+  document.getElementById('queue-badge').textContent=(s.queue_pending||[]).length+' pendientes';
+  document.getElementById('queue-paused').classList.toggle('on',!!s.queue_paused);
 
-  recog.onstart = () => {
-    active = true;
-    micBtn.classList.add('listening');
-    micBtn.title = 'Haz clic para parar';
-  };
+  const ir=document.getElementById('intent-row');
+  if(s.last_text_command){
+    ir.classList.add('on');
+    ir.innerHTML=`"${esc(s.last_text_command)}" → <strong style="color:var(--cyan)">${esc(s.last_llm_command)}</strong> (${esc(s.last_llm_source)}, conf ${s.last_llm_confidence})<br><span style="color:var(--dim)">${esc(s.last_llm_reason)}</span>`;
+  }else{ir.classList.remove('on');}
 
-  recog.onend = () => {
-    active = false;
-    micBtn.classList.remove('listening');
-    micBtn.title = 'Hablar comando (Web Speech API)';
-    if (!input.value.trim()) voiceStatus.textContent = '';
-  };
+  if(window._updateRobot3D)window._updateRobot3D(s);
+  if(window._updateMap)window._updateMap(s);
+  renderReport(s.report);
+}
 
-  recog.onerror = (ev) => {
-    active = false;
-    micBtn.classList.remove('listening');
-    const msg = ev.error === 'not-allowed'
-      ? 'Permiso de micrófono denegado'
-      : `Error: ${ev.error}`;
-    voiceStatus.textContent = msg;
-  };
+function renderReport(r){
+  r=r||{};
+  const status=r.status||'idle';
+  const badge=document.getElementById('report-badge');
+  badge.className='report-badge panel-sub '+status;
+  badge.textContent=RL[status]||status;
+  document.getElementById('report-msg').textContent=r.message||'';
+  const links=[];
+  if(r.run_url)links.push(`<a href="${esc(r.run_url)}" target="_blank">Carpeta run</a>`);
+  if(r.defect_map_url)links.push(`<a href="${esc(r.defect_map_url)}" target="_blank">Mapa defectos</a>`);
+  document.getElementById('report-links').innerHTML=links.join(' ');
+  const mw=document.getElementById('report-map'),mi=document.getElementById('report-map-img');
+  if(r.defect_map_url){mi.src=r.defect_map_url+'?t='+encodeURIComponent(r.run_id||'');mw.style.display='block';}else{mw.style.display='none';}
+  document.getElementById('report-summary').innerHTML=r.summary_md?renderMd(r.summary_md):'';
+  document.getElementById('report-full').innerHTML=r.report_md?'<details><summary>Informe completo (LLM)</summary>'+renderMd(r.report_md)+'</details>':'';
+  document.getElementById('report-empty').style.display=status==='idle'?'block':'none';
+}
 
-  recog.onresult = (ev) => {
-    const result = ev.results[ev.results.length - 1];
-    const transcript = result[0].transcript.trim();
-    input.value = transcript;
-    voiceStatus.textContent = result.isFinal
-      ? `Reconocido: "${transcript}"`
-      : `Interim: "${transcript}"`;
+async function pollState(){
+  try{const r=await fetch('/api/state',{cache:'no-store'});if(r.ok)renderState(await r.json());}catch(e){}
+}
+async function pollPC(){
+  try{const r=await fetch('/api/pointcloud',{cache:'no-store'});if(r.ok&&window._updatePC)window._updatePC(await r.json());}catch(e){}
+}
 
-    if (result.isFinal && transcript) {
-      // Enviar automáticamente al servidor
-      const form = new FormData();
-      form.append('text', transcript);
-      fetch('/text_cmd', {method: 'POST', body: form})
-        .then((r) => r.ok ? refreshState() : null)
-        .catch((err) => { voiceStatus.textContent = `Error enviando: ${err}`; });
-      input.value = '';
+pollState();setInterval(pollState,1000);
+setInterval(pollPC,250);
+
+// Camera dot
+(function(){
+  const dot=document.getElementById('cam-dot');
+  function chk(){fetch('/api/snapshot',{method:'HEAD',cache:'no-store'}).then(r=>dot.classList.toggle('live',r.ok)).catch(()=>dot.classList.remove('live'));}
+  chk();setInterval(chk,3000);
+})();
+
+// Command
+document.getElementById('cmd-send').addEventListener('click',async()=>{
+  const inp=document.getElementById('cmd-input'),text=inp.value.trim();
+  if(!text)return;
+  const fd=new FormData();fd.append('text',text);
+  const r=await fetch('/text_cmd',{method:'POST',body:fd});
+  if(r.ok){inp.value='';pollState();}
+});
+document.getElementById('cmd-input').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('cmd-send').click();});
+
+// Web Speech API
+(function(){
+  const mb=document.getElementById('mic-btn'),inp=document.getElementById('cmd-input'),hint=document.getElementById('voice-hint');
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){mb.style.opacity='.3';mb.style.cursor='not-allowed';return;}
+  const rec=new SR();rec.lang='es-ES';rec.interimResults=true;rec.continuous=false;
+  let active=false;
+  mb.addEventListener('click',()=>active?rec.stop():(inp.value='',hint.textContent='Escuchando…',rec.start()));
+  rec.onstart=()=>{active=true;mb.classList.add('listening');};
+  rec.onend=()=>{active=false;mb.classList.remove('listening');if(!inp.value.trim())hint.textContent='';};
+  rec.onerror=ev=>{active=false;mb.classList.remove('listening');hint.textContent=ev.error==='not-allowed'?'Micrófono denegado':`Error: ${ev.error}`;};
+  rec.onresult=ev=>{
+    const res=ev.results[ev.results.length-1],text=res[0].transcript.trim();
+    inp.value=text;hint.textContent=res.isFinal?`✓ "${text}"`:` "${text}"`;
+    if(res.isFinal&&text){
+      const fd=new FormData();fd.append('text',text);
+      fetch('/text_cmd',{method:'POST',body:fd}).then(r=>r.ok?pollState():null);
+      inp.value='';
     }
   };
-}());
+})();
 </script>
 </body>
 </html>'''
@@ -2366,6 +2754,73 @@ def _flask_thread(node: MissionController):
     @app.route('/api/clear_queue', methods=['POST'])
     def api_clear_queue():
         return jsonify({'removed': node.clear_queue(), 'queue': node.queue_state()})
+
+    @app.route('/api/pointcloud')
+    def api_pointcloud():
+        return jsonify(node.get_pointcloud())
+
+    @app.route('/api/robot_description')
+    def api_robot_description():
+        urdf = node.get_robot_description()
+        if not urdf:
+            abort(503)
+        return Response(urdf, mimetype='application/xml')
+
+    @app.route('/api/mesh/<package>/<path:rest>')
+    def api_mesh(package: str, rest: str):
+        import os as _os
+        try:
+            import ament_index_python.packages as _aip
+            share = _aip.get_package_share_directory(package)
+            target = _os.path.realpath(_os.path.join(share, rest))
+            if not target.startswith(_os.path.realpath(share)):
+                abort(403)
+            if not _os.path.isfile(target):
+                abort(404)
+            return send_from_directory(_os.path.dirname(target), _os.path.basename(target))
+        except Exception:
+            abort(404)
+
+    def _mjpeg_generator():
+        """Genera un stream MJPEG con el ultimo frame de la camara."""
+        _placeholder = None  # frame gris de 320x240 cuando no hay imagen
+        while True:
+            jpeg = node.get_camera_jpeg()
+            if jpeg is None:
+                # Genera placeholder gris si aun no hay frames
+                if _placeholder is None:
+                    try:
+                        MissionController._ensure_cv2_path()
+                        import cv2
+                        import numpy as np
+                        grey = np.full((240, 320, 3), 60, dtype=np.uint8)
+                        cv2.putText(grey, 'Sin senal de camara', (20, 120),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (180, 180, 180), 1)
+                        _, buf = cv2.imencode('.jpg', grey)
+                        _placeholder = buf.tobytes()
+                    except Exception:
+                        _placeholder = b''
+                jpeg = _placeholder or b''
+            if jpeg:
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
+                )
+            threading.Event().wait(0.04)   # ~25 fps max
+
+    @app.route('/video_feed')
+    def video_feed():
+        return Response(
+            _mjpeg_generator(),
+            mimetype='multipart/x-mixed-replace; boundary=frame',
+        )
+
+    @app.route('/api/snapshot')
+    def api_snapshot():
+        jpeg = node.get_camera_jpeg()
+        if jpeg is None:
+            abort(503)
+        return Response(jpeg, mimetype='image/jpeg')
 
     @app.route('/inspections/<path:rel>')
     def serve_inspection_file(rel: str):

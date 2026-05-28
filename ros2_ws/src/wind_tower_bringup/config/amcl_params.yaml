@@ -17,9 +17,15 @@ amcl:
     alpha4: 0.3   # ruido traslacional por rotación
     alpha5: 0.2   # (solo skid-steer, ignorado en diff-drive)
 
-    # ── Número de partículas ───────────────────────────────────────────────────
-    min_particles: 500
-    max_particles: 2000
+    # ── Número de partículas (KLD adaptive sampling) ──────────────────────────
+    # Subido max 2000→5000: cuando el robot se pierde (slip severo en rampa o
+    # arranque con pose desconocida), AMCL necesita MUCHAS partículas para cubrir
+    # las hipótesis y reconverger. KLD ajusta dinámicamente el número entre
+    # min_particles (convergido) y max_particles (perdido) según pf_err/pf_z.
+    # Con solo 2000 partículas el almacén grande deja "agujeros" donde la pose
+    # real puede no tener ninguna partícula → AMCL no recupera.
+    min_particles: 800
+    max_particles: 5000
 
     # ── Frames ────────────────────────────────────────────────────────────────
     base_frame_id: "base_link"
@@ -59,20 +65,66 @@ amcl:
     update_min_a: 0.15
     resample_interval: 1       # ciclos entre resamplings
 
-    # ── Modelo del lidar ──────────────────────────────────────────────────────
+    # ── Modelo del lidar (scan-to-map matching) ───────────────────────────────
+    # Endurecido el match láser↔mapa para que la pose correcta destaque sobre las
+    # hipótesis erróneas cuando el robot está perdido:
+    #   - laser_max_beams 60→180: más rayos = más poder discriminante. En un
+    #     almacén con paredes/rampas repetitivas, 60 rayos confunden poses
+    #     simétricas; 180 fijan la geometría real. La VLP-16 proyectada a 0.5°
+    #     da ~720 rayos, así que submuestrear a 180 sigue siendo barato.
+    #   - z_hit 0.5→0.85 y z_rand 0.5→0.15: damos MUCHO más peso al match real
+    #     contra el mapa y mucho menos al ruido aleatorio uniforme. Con z_rand
+    #     alto (0.5) toda pose tiene un "suelo" de probabilidad y AMCL no
+    #     distingue la buena → no recupera. z_hit+z_rand deben sumar ~1.0.
+    #   - sigma_hit 0.2→0.15: gaussiana del hit más estrecha → match más exigente
+    #     en distancia, penaliza poses ligeramente desalineadas.
+    #   - laser_max_range 12→15: en el almacén grande necesitamos ver paredes
+    #     lejanas como referencia para fijar la pose globalmente.
     laser_model_type: "likelihood_field"
-    laser_max_range: 12.0
+    laser_max_range: 15.0
     laser_min_range: 0.1
     laser_likelihood_max_dist: 2.0
-    laser_max_beams: 60
-    sigma_hit: 0.2
-    z_hit: 0.5
-    z_rand: 0.5
+    laser_max_beams: 180
+    sigma_hit: 0.15
+    z_hit: 0.85
+    z_rand: 0.15
 
-    # ── Eficiencia ────────────────────────────────────────────────────────────
+    # ── Recuperación cuando el robot se pierde ────────────────────────────────
+    # Augmented-MCL: si la verosimilitud media (rápida) cae muy por debajo de la
+    # media lenta, AMCL INYECTA partículas aleatorias por el mapa para recapturar
+    # la pose (random particle injection). Esto es el mecanismo clave de
+    # auto-recuperación sin intervención humana ("kidnapped robot").
+    #   - recovery_alpha_slow 0.001 (default): media móvil lenta de la verosimilitud.
+    #   - recovery_alpha_fast 0.1 (default): media rápida. Cuando fast << slow se
+    #     inyectan partículas. Estos defaults estaban a 0 implícito en algunos
+    #     setups → la recuperación nunca se disparaba. Los fijamos explícitos.
+    # NOTA: si el robot NUNCA debe auto-teleportarse (entornos muy simétricos
+    # donde una mala inyección empeora), poner ambos a 0.0. Aquí los queremos
+    # ACTIVOS porque el slip en rampa puede divergir la pose y necesitamos
+    # reconvergencia automática.
     recovery_alpha_slow: 0.001
     recovery_alpha_fast: 0.1
-    pf_err: 0.05
+
+    # KLD: cuanto MÁS exigente (pf_err bajo, pf_z alto) más partículas mantiene
+    # AMCL mientras hay incertidumbre → mejor cobertura del mapa al recuperar.
+    pf_err: 0.02
     pf_z: 0.99
+
+    # ── Actualización sin movimiento ───────────────────────────────────────────
+    # Permite que AMCL re-pese partículas aunque el robot esté quieto. Útil tras
+    # un Spin de recuperación: el robot rota sobre sí, junta scans desde varios
+    # ángulos y AMCL afina la pose sin necesitar traslación.
+    # (El servicio /amcl/request_nomotion_update se puede llamar desde la BT/
+    #  mission_controller cuando se detecta pose dudosa.)
+
+    # ── Eficiencia / TF ────────────────────────────────────────────────────────
     save_pose_rate: 0.5
-    transform_tolerance: 0.5
+    # transform_tolerance 0.5→0.8: en la rampa el TF map→odom puede llegar tarde
+    # bajo carga; un margen mayor evita "message filter dropping" del scan que
+    # dejaría a AMCL sin actualizar justo cuando más lo necesita (perdido).
+    transform_tolerance: 0.8
+    # No descartar el primer mapa: permite recargar mapa si se reinicia map_server.
+    first_map_only: false
+    # Re-pesar el filtro en CADA scan recibido (no saltarse ciclos) para acelerar
+    # la reconvergencia cuando está perdido.
+    always_reset_initial_pose: false

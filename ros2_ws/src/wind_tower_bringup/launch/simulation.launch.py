@@ -109,6 +109,9 @@ def generate_launch_description():
             os.path.join(pkg_clearpath_gz, 'worlds'),
             os.path.join(pkg_clearpath_gz, 'meshes'),
             meshes_path,
+            # Models dir: Gazebo searches for model://X in directories that
+            # directly contain a folder named X with model.config inside.
+            os.path.join(pkg_wind_sim, 'models'),
         ] + packages_paths),
     )
 
@@ -132,6 +135,46 @@ def generate_launch_description():
         name='clock_bridge',
         output='screen',
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+    )
+
+    # Bridge SetEntityPose service: permite al nodo random_walk_people
+    # mover los modelos de personas usando /world/<world>/set_pose.
+    # UserCommands system ya está cargado en el mundo SDF.
+    set_pose_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='set_pose_bridge',
+        output='screen',
+        arguments=[
+            '/world/wind_tower_world/set_pose'
+            '@ros_gz_interfaces/srv/SetEntityPose',
+        ],
+    )
+
+    # Nodo de movimiento aleatorio de personas.
+    # Delay de 15 s para que Gazebo cargue todos los modelos antes del primer tick.
+    # use_gz_service=false → el nodo intenta primero el servicio ROS bridgeado y
+    # cae automáticamente a `gz service` subprocess si el bridge no está listo.
+    # Para forzar siempre gz service (más fiable en WSL2), poner use_gz_service=true.
+    random_walk_node = TimerAction(
+        period=15.0,
+        actions=[
+            Node(
+                package='wind_tower_inspection_behaviour',
+                executable='random_walk_people',
+                name='random_walk_people',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': True,
+                    'world_name': 'wind_tower_world',
+                    'worker_names': 'worker_1,worker_2,worker_3,worker_4',
+                    'speed': 0.8,
+                    'tick_rate': 10.0,
+                    'waypoint_timeout': 30.0,
+                    'use_gz_service': False,
+                }],
+            ),
+        ],
     )
 
     robot_description_relay = Node(
@@ -205,8 +248,8 @@ def generate_launch_description():
     )
 
     # Bridge cámara RGB de inspección montada en el TCP del UR5e.
-    # ros_gz_image convierte imágenes de Gazebo de forma más robusta que el
-    # parameter_bridge genérico; CameraInfo sigue usando ros_gz_bridge.
+    # Publica directamente en /inspection/camera/image_raw para evitar un relay
+    # intermedio con QoS incompatible con el stream de sensor.
     inspection_image_bridge = Node(
         package='ros_gz_image',
         executable='image_bridge',
@@ -215,16 +258,9 @@ def generate_launch_description():
         arguments=[
             '/robot/sensors/inspection_camera/image',
         ],
-    )
-
-    inspection_image_relay = Node(
-        package='topic_tools',
-        executable='relay',
-        name='inspection_image_relay',
-        output='screen',
-        arguments=[
-            '/robot/sensors/inspection_camera/image',
-            '/inspection/camera/image_raw',
+        remappings=[
+            ('/robot/sensors/inspection_camera/image',
+             '/inspection/camera/image_raw'),
         ],
     )
 
@@ -240,6 +276,13 @@ def generate_launch_description():
         remappings=[
             ('/robot/sensors/inspection_camera/image/camera_info',
              '/inspection/camera/camera_info'),
+        ],
+    )
+    camera_bridges = TimerAction(
+        period=8.0,
+        actions=[
+            inspection_image_bridge,
+            inspection_camera_info_bridge,
         ],
     )
 
@@ -335,12 +378,11 @@ def generate_launch_description():
         set_gz_relay,
         gz_sim,
         clock_bridge,
+        set_pose_bridge,
         turner_cmd_bridge,
         turner_state_bridge,
         lidar3d_bridge,
-        inspection_image_bridge,
-        inspection_image_relay,
-        inspection_camera_info_bridge,
+        camera_bridges,
         robot_description_relay,
         tf_relay,
         tf_static_relay,
@@ -349,4 +391,5 @@ def generate_launch_description():
         robot_spawn,
         ekf_param_override,
         inspection_teleop_limits,
+        random_walk_node,
     ])

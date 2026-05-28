@@ -1,12 +1,9 @@
 """
-Puente de QoS para /scan.
+Puente de QoS para LaserScan.
 
 pointcloud_to_laserscan publica con SensorDataQoS (BEST_EFFORT).
-slam_toolbox y nav2_amcl suscriben con RELIABLE (SystemDefaultQoS).
-Este nodo actúa de puente: suscribe BEST_EFFORT → republica RELIABLE.
-
-Entrada:  /scan_raw  (BEST_EFFORT) ← desde pointcloud_to_laserscan
-Salida:   /scan      (RELIABLE)    → slam_toolbox, nav2, RViz
+slam_toolbox, nav2_amcl y costmap pueden necesitar RELIABLE. Este nodo actua
+de puente configurable: suscribe BEST_EFFORT y republica RELIABLE.
 """
 
 import rclpy
@@ -32,9 +29,17 @@ class ScanQosBridge(Node):
             depth=10,
         )
 
-        self._pub = self.create_publisher(LaserScan, '/scan', pub_qos)
-        self._sub = self.create_subscription(LaserScan, '/scan_raw', self._cb, sub_qos)
-        self.get_logger().info('scan_qos_bridge: /scan_raw (BE) → /scan (RELIABLE)')
+        self.declare_parameter('input_topic', '/scan_raw')
+        self.declare_parameter('output_topic', '/scan')
+
+        input_topic = self.get_parameter('input_topic').value
+        output_topic = self.get_parameter('output_topic').value
+
+        self._pub = self.create_publisher(LaserScan, output_topic, pub_qos)
+        self._sub = self.create_subscription(LaserScan, input_topic, self._cb, sub_qos)
+        self.get_logger().info(
+            f'scan_qos_bridge: {input_topic} (BE) -> {output_topic} (RELIABLE)'
+        )
 
     def _cb(self, msg: LaserScan) -> None:
         self._pub.publish(msg)

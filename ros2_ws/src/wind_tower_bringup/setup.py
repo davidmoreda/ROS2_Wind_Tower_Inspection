@@ -27,6 +27,10 @@ setup(
             'config/slam.rviz',
             'config/navigation.rviz',
         ]),
+        ('share/' + package_name + '/behavior_trees', [
+            'behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml',
+            'behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

@@ -32,6 +32,7 @@ setup(
         'console_scripts': [
             'mission_controller = wind_tower_inspection_behaviour.mission_controller:main',
             'voice_command_node = wind_tower_inspection_behaviour.voice_command_node:main',
+            'random_walk_people = wind_tower_inspection_behaviour.random_walk_people:main',
         ],
     },
 )

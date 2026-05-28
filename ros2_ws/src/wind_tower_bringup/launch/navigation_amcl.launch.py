@@ -90,6 +90,16 @@ def generate_launch_description():
     nav2_params  = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
     amcl_params  = os.path.join(pkg_bringup, 'config', 'amcl_params.yaml')
     nav2_rviz    = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
+    nav_to_pose_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_to_pose_w_replanning_and_recovery.xml',
+    )
+    nav_through_poses_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_through_poses_w_replanning_and_recovery.xml',
+    )
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
@@ -230,7 +240,14 @@ def generate_launch_description():
                 executable='bt_navigator',
                 name='bt_navigator',
                 output='screen',
-                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                parameters=[
+                    nav2_params,
+                    {
+                        'use_sim_time': use_sim_time,
+                        'default_nav_to_pose_bt_xml': nav_to_pose_bt,
+                        'default_nav_through_poses_bt_xml': nav_through_poses_bt,
+                    },
+                ],
                 remappings=remappings_tf,
             ),
             Node(
@@ -294,6 +311,42 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
+    # ── Cámara de inspección — bridges desde Gazebo ───────────────────────────
+    # Usamos nombres distintos (_nav) para coexistir con simulation.launch.py
+    # sin que ROS 2 mate uno de los dos nodos duplicados.
+    camera_bridge = Node(
+        package='ros_gz_image',
+        executable='image_bridge',
+        name='inspection_image_bridge_nav',
+        output='screen',
+        arguments=['/robot/sensors/inspection_camera/image'],
+        remappings=[
+            ('/robot/sensors/inspection_camera/image',
+             '/inspection/camera/image_raw'),
+        ],
+    )
+    camera_info_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='inspection_camera_info_bridge_nav',
+        output='screen',
+        arguments=[
+            '/robot/sensors/inspection_camera/image/camera_info'
+            '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+        ],
+        remappings=[
+            ('/robot/sensors/inspection_camera/image/camera_info',
+             '/inspection/camera/camera_info'),
+        ],
+    )
+    camera_bridges = TimerAction(
+        period=5.0,
+        actions=[
+            camera_bridge,
+            camera_info_bridge,
+        ],
+    )
+
     # ── Behaviour nodes (mission controller + voice) ───────────────────────
     # Se lanzan 35 s después para que Nav2 lifecycle esté activo antes de que
     # mission_controller intente conectarse al action server de Nav2.
@@ -324,6 +377,7 @@ def generate_launch_description():
         declare_map,
         dualsense_joy,
         ps5_teleop,
+        camera_bridges,
         perception,
         localization,
         navigation_nodes,
