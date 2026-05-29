@@ -32,6 +32,8 @@ import argparse
 import json
 import math
 import os
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -382,9 +384,11 @@ def main(argv=None):
         return
 
     _load_dotenv()
-    api_key = os.environ.get('GEMINI_API_KEY')
+    # El SDK google-genai acepta tanto GEMINI_API_KEY como GOOGLE_API_KEY;
+    # admitimos ambas para no depender de cómo esté nombrada en el .env.
+    api_key = os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY')
     if not api_key:
-        print('[report] GEMINI_API_KEY no configurada (ni en env ni en .env). '
+        print('[report] GEMINI_API_KEY/GOOGLE_API_KEY no configurada (ni en env ni en .env). '
               'Resumen y mapa generados; relanza sin --dry-run cuando tengas la key.',
               file=sys.stderr)
         sys.exit(2)
@@ -440,6 +444,70 @@ def main(argv=None):
     with open(report_path, 'w', encoding='utf-8') as fh:
         fh.write(report_text + '\n')
     print(f'[report] informe: {report_path}')
+
+    pdf_path = _export_pdf(output_dir, report_text, map_path)
+    if pdf_path:
+        print(f'[report] pdf:      {pdf_path}')
+
+
+def _export_pdf(output_dir: str, report_text: str,
+                map_path: str) -> Optional[str]:
+    """Convierte el informe Markdown de Gemini a PDF con pandoc + xelatex.
+
+    Ensambla un documento con el cuerpo del informe y, al final, el mapa
+    de defectos embebido. Si pandoc o el motor LaTeX no están disponibles,
+    no es un error fatal: el resto del pipeline (md + png) ya está hecho.
+    Devuelve la ruta del PDF, o None si no se pudo generar.
+    """
+    pandoc = shutil.which('pandoc')
+    if pandoc is None:
+        print('[report] pandoc no instalado; omito PDF (md y png ya generados).',
+              file=sys.stderr)
+        return None
+
+    # Documento combinado: informe LLM + mapa de defectos al final. La ruta de
+    # la imagen es relativa a output_dir, donde lanzamos pandoc (resource-path).
+    doc = report_text.rstrip() + '\n'
+    if os.path.isfile(map_path):
+        doc += (
+            '\n\n# Mapa visual de defectos\n\n'
+            f'![Mapa de defectos desplegado]({os.path.basename(map_path)})\n'
+        )
+
+    combined_md = os.path.join(output_dir, 'inspection_report.pdf.md')
+    with open(combined_md, 'w', encoding='utf-8') as fh:
+        fh.write(doc)
+
+    pdf_path = os.path.join(output_dir, 'inspection_report.pdf')
+    # xelatex maneja acentos/Unicode del español mejor que pdflatex.
+    engine = 'xelatex' if shutil.which('xelatex') else 'pdflatex'
+    cmd = [
+        pandoc, combined_md,
+        '-o', pdf_path,
+        f'--pdf-engine={engine}',
+        '--resource-path', output_dir,
+        '-V', 'geometry:margin=2.2cm',
+        '-V', 'mainfont=DejaVu Sans' if engine == 'xelatex' else 'fontenc=T1',
+        '--metadata', 'title=Informe de Inspección — Torre Eólica',
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        print(f'[report] PDF no generado ({exc}); md y png disponibles.',
+              file=sys.stderr)
+        return None
+    finally:
+        try:
+            os.remove(combined_md)
+        except OSError:
+            pass
+
+    if proc.returncode != 0 or not os.path.isfile(pdf_path):
+        tail = (proc.stderr or '').strip().splitlines()[-1:] or ['sin detalle']
+        print(f'[report] pandoc falló (rc={proc.returncode}): {tail[0]}; '
+              'md y png disponibles.', file=sys.stderr)
+        return None
+    return pdf_path
 
 
 if __name__ == '__main__':

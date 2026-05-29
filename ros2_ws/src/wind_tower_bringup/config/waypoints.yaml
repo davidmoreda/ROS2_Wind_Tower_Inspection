@@ -56,8 +56,11 @@ waypoints:
 
   fin_tramo:
     description: "Extremo norte del tubo — fin inspeccion"
+    # Y verificada con Publish Point (/clicked_point) en el extremo real del tubo.
+    # X se mantiene en el centro (0.245) para no desviar la linea central: el
+    # guard lateral mide contra INSP_CENTER_X=0.245 (mission_controller.py).
     x: 0.245
-    y: 39.579
+    y: 37.391
     yaw: 1.5708
     via_points: []
 

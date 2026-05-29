@@ -55,6 +55,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('wind_tower_bringup')
+    pkg_sim = get_package_share_directory('wind_tower_simulation')
 
     # Sube el límite de participants de CycloneDDS (default ~64 → 240).
     # Sin esto los nodos Nav2 mueren con SIGABRT por slots agotados al
@@ -100,6 +101,8 @@ def generate_launch_description():
         'behavior_trees',
         'navigate_through_poses_w_replanning_and_recovery.xml',
     )
+    defects_world = os.path.join(
+        pkg_sim, 'worlds', 'wind_tower_world_defects_actors.sdf')
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
@@ -125,6 +128,20 @@ def generate_launch_description():
         period=15.0,
         actions=[
             Node(
+                package='wind_tower_bringup',
+                executable='defect_cloud_filter',
+                name='defect_cloud_filter_scan',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'input_topic': '/velodyne_points',
+                    'output_topic': '/velodyne_points_scan_clean',
+                    'world_file': defects_world,
+                    'fixed_frame': 'map',
+                    'radius_margin': 0.08,
+                }],
+            ),
+            Node(
                 package='pointcloud_to_laserscan',
                 executable='pointcloud_to_laserscan_node',
                 name='pointcloud_to_laserscan_node',
@@ -134,7 +151,7 @@ def generate_launch_description():
                     {'use_sim_time': use_sim_time},
                 ],
                 remappings=[
-                    ('cloud_in', '/velodyne_points'),
+                    ('cloud_in', '/velodyne_points_scan_clean'),
                     ('scan',     '/scan_raw'),
                 ],
             ),
@@ -164,14 +181,24 @@ def generate_launch_description():
                     'max_range': 10.0,
                     'max_obstacle_height': 2.0,
                     # Recinto del tubo (dentro de las barreras x=±5): descarta
-                    # los ~80 defectos esféricos + superficie del tubo del
+                    # los ~80 defectos esféricos + superficie curva del tubo del
                     # costmap. Las barreras quedan fuera → siguen marcándose.
+                    #
+                    # IMPORTANTE: la caja DEBE cubrir TODO el tramo de inspeccion
+                    # (inicio_tramo y=10.25 → fin_tramo y=39.58). Antes ymax=14
+                    # dejaba fuera y>14 (casi todo el tubo): a partir de ahi la
+                    # pared curva entraba en el costmap como obstaculo, Nav2 la
+                    # esquivaba y empujaba al robot fuera de la linea → se subia
+                    # por la pared "a medio tubo". ymax=42 cubre el tubo + margen
+                    # de raytrace (max_range 10 m hacia el norte desde el ultimo
+                    # punto). El robot va por DENTRO sobre la curva: esa
+                    # superficie NO debe ser obstaculo, solo las barreras x=±5.
                     'exclude_zone_enabled': True,
                     'exclude_frame': 'map',
                     'exclude_xmin': -4.6,
                     'exclude_xmax': 4.6,
                     'exclude_ymin': -14.0,
-                    'exclude_ymax': 14.0,
+                    'exclude_ymax': 42.0,
                 }],
             ),
         ],

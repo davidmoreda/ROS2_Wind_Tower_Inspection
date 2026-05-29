@@ -32,6 +32,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_bringup     = get_package_share_directory('wind_tower_bringup')
     pkg_slam        = get_package_share_directory('slam_toolbox')
+    pkg_sim         = get_package_share_directory('wind_tower_simulation')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     rviz_enabled = LaunchConfiguration('rviz')
@@ -47,6 +48,23 @@ def generate_launch_description():
         choices=['true', 'false'],
         description='Lanzar RViz con config de SLAM',
     )
+    defects_world = os.path.join(
+        pkg_sim, 'worlds', 'wind_tower_world_defects_actors.sdf')
+
+    defect_filter = Node(
+        package='wind_tower_bringup',
+        executable='defect_cloud_filter',
+        name='defect_cloud_filter_scan',
+        output='screen',
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'input_topic': '/velodyne_points',
+            'output_topic': '/velodyne_points_scan_clean',
+            'world_file': defects_world,
+            'fixed_frame': 'map',
+            'radius_margin': 0.08,
+        }],
+    )
 
     # ── pointcloud_to_laserscan ───────────────────────────────────────────────
     # Convierte /velodyne_points (PointCloud2) → /scan (LaserScan 2D)
@@ -60,7 +78,7 @@ def generate_launch_description():
             {'use_sim_time': use_sim_time},
         ],
         remappings=[
-            ('cloud_in', '/velodyne_points'),
+            ('cloud_in', '/velodyne_points_scan_clean'),
             ('scan',     '/scan_raw'),  # BEST_EFFORT → bridge lo convierte a RELIABLE
         ],
     )
@@ -131,7 +149,7 @@ def generate_launch_description():
 
     # Espera 15 s a que el reloj de Gazebo se estabilice antes de arrancar
     # pc2scan y slam_toolbox — evita el "jump back in time" que los deja KO
-    delayed_slam = TimerAction(period=15.0, actions=[pc2scan, scan_bridge, slam])
+    delayed_slam = TimerAction(period=15.0, actions=[defect_filter, pc2scan, scan_bridge, slam])
 
     return LaunchDescription([
         declare_use_sim_time,

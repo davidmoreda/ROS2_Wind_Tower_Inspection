@@ -66,6 +66,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     pkg_bringup = get_package_share_directory('wind_tower_bringup')
     pkg_slam    = get_package_share_directory('slam_toolbox')
+    pkg_sim     = get_package_share_directory('wind_tower_simulation')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz     = LaunchConfiguration('rviz')
@@ -84,6 +85,8 @@ def generate_launch_description():
     nav2_params   = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
     slam_params   = os.path.join(pkg_bringup, 'config', 'slam_params.yaml')
     nav2_rviz_cfg = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
+    defects_world = os.path.join(
+        pkg_sim, 'worlds', 'wind_tower_world_defects_actors.sdf')
     nav_to_pose_bt = os.path.join(
         pkg_bringup,
         'behavior_trees',
@@ -130,6 +133,20 @@ def generate_launch_description():
         period=15.0,
         actions=[
             Node(
+                package='wind_tower_bringup',
+                executable='defect_cloud_filter',
+                name='defect_cloud_filter_scan',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'input_topic': '/velodyne_points',
+                    'output_topic': '/velodyne_points_scan_clean',
+                    'world_file': defects_world,
+                    'fixed_frame': 'map',
+                    'radius_margin': 0.08,
+                }],
+            ),
+            Node(
                 package='pointcloud_to_laserscan',
                 executable='pointcloud_to_laserscan_node',
                 name='pointcloud_to_laserscan_node',
@@ -139,7 +156,7 @@ def generate_launch_description():
                     {'use_sim_time': use_sim_time},
                 ],
                 remappings=[
-                    ('cloud_in', '/velodyne_points'),
+                    ('cloud_in', '/velodyne_points_scan_clean'),
                     ('scan',     '/scan_raw'),
                 ],
             ),

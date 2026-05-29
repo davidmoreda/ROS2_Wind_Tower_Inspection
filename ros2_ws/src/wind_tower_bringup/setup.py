@@ -51,6 +51,7 @@ setup(
             'turner_node = wind_tower_bringup.turner_node:main',
             'scan_qos_bridge = wind_tower_bringup.scan_qos_bridge:main',
             'obstacle_cloud_filter = wind_tower_bringup.obstacle_cloud_filter:main',
+            'defect_cloud_filter = wind_tower_bringup.defect_cloud_filter:main',
             'mission_navigator = wind_tower_bringup.mission_navigator:main',
         ],
     },

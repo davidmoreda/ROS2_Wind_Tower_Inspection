@@ -10,6 +10,7 @@ Funcionalidades:
 - Web UI con 4 botones para disparar cada mision.
 """
 
+import json
 import math
 import subprocess
 import sys
@@ -84,9 +85,18 @@ INSP_PAUSE_SEC = 1.0
 INSP_ARM_TIMEOUT_S = 15.0   # sweep simple 360° ~8 s con velocity_scaling=0.15
                             # (8 waypoints + retorno a home módulo 2π).
 INSP_ARM_POLL_S    = 0.2
-INSP_MAX_LATERAL_ERROR = 1.6   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
-INSP_MAX_ROLL_DEG = 18.0       # Husky muy estable; ~8 deg rozando pared NO es vuelco. Solo abortar ante inclinacion sostenida y grande
-INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
+# Tubo cilindrico de 8 m de diametro: el robot circula POR DENTRO, sobre la
+# superficie curva. Al desviarse de la linea central SUBE por la pared y se
+# inclina → el roll y el desvio lateral estan acoplados: roll ≈ asin(desvio/R).
+# El roll viene del vector gravedad (acelerometro) → es ABSOLUTO, no deriva,
+# al contrario que el yaw/posicion de AMCL. Por eso el guard de desvio lateral
+# se basa en el ROLL, no en robot_x (que deriva y disparaba en falso).
+CYL_RADIUS_M = 4.0             # radio del tubo (diam 8 m)
+INSP_MAX_ROLL_DEG = 14.5       # = 1.0 m de desvio lateral en R=4 m (asin(1.0/4)). Drift-free.
+INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas (eje libre: tubo recto en Y)
+# robot_x (AMCL) ya NO es el disparador fino: deriva en el tubo. Queda solo como
+# BACKSTOP holgado por si AMCL se va del todo (robot realmente perdido).
+INSP_MAX_LATERAL_ERROR = 3.0   # m — backstop AMCL, no tolerancia de linea
 # Antirrebote del guard: la condicion debe mantenerse N ticks seguidos
 # (0.2 s/tick) antes de cancelar. Asi un pico transitorio al rozar una
 # pared (y recuperarse) no aborta la mision entera; solo una inclinacion
@@ -94,6 +104,16 @@ INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
 INSP_GUARD_STRIKES_REQUIRED = 5   # 5 x 0.2 s = 1.0 s sostenido
 TUBE_ROUTE_HALF_WIDTH = 1.25
 TUBE_ROUTE_MIN_Y = 6.5
+
+# ── Re-anclaje AMCL en cada parada de inspeccion ────────────────────────────────
+# El robot esta QUIETO en cada una de las ~30 paradas (sweep del brazo). Mientras
+# tanto disparamos /request_nomotion_update varias veces: AMCL re-pesa particulas
+# contra el laser SIN que la odometria (que slippea en la superficie cilindrica)
+# meta deriva. Asi cada parada resetea el error de localizacion acumulado en lugar
+# de dejarlo crecer a lo largo de los ~29 m del tubo.
+INSP_NOMOTION_SETTLE_S   = 0.6   # espera a que el robot pare del todo antes de re-pesar
+INSP_NOMOTION_PERIOD_S   = 0.4   # 1 actualizacion cada 2 ticks (200 ms/tick)
+INSP_NOMOTION_MAX_CALLS  = 4     # 4 re-pesados repartidos en ~1.8 s de pausa
 
 STUCK_TIMEOUT_SEC = 18.0
 STUCK_MIN_PROGRESS_M = 0.08
@@ -119,6 +139,7 @@ CHARGE_SEARCH_RETRY_DELAY_SEC = 2.0
 INSPECTIONS_ROOT = Path('~/ROS2_Wind_Tower_Inspection/inspections').expanduser()
 REPORT_SUBPROCESS_TIMEOUT_SEC = 240.0
 REPORT_MODULE = 'wind_tower_perception.scripts.generate_inspection_report'
+CAMERA_STALE_SEC = 2.0
 
 
 # ── Nodo ROS2 ──────────────────────────────────────────────────────────────────
@@ -186,6 +207,9 @@ class MissionController(Node):
         self._arm_pause_failures = []
         self._arm_pause_saw_false = False      # se cumplió el primer flanco
         self._arm_pause_completed = False      # se cumplió el segundo flanco
+        # Re-anclaje AMCL durante la pausa (ver INSP_NOMOTION_*).
+        self._arm_pause_nomotion_calls = 0
+        self._arm_pause_last_nomotion_s = 0.0
         now = self._now_sec()
         self._last_progress_x = 0.0
         self._last_progress_y = 0.0
@@ -220,6 +244,7 @@ class MissionController(Node):
         self._report_summary_md = ''
         self._report_full_md = ''
         self._report_has_defect_map = False
+        self._report_has_pdf = False
         self._report_message = ''
         self._report_started_at = 0.0
         self._report_thread: Optional[threading.Thread] = None
@@ -270,12 +295,25 @@ class MissionController(Node):
         # Camara — frame JPEG para streaming web
         self._camera_frame_lock = threading.Lock()
         self._camera_jpeg: Optional[bytes] = None
+        self._camera_last_frame_time = 0.0
+        self._camera_frame_total = 0
+        self._camera_fps = 0.0
+        self._camera_fps_window_start = now
+        self._camera_fps_window_count = 0
+        self.declare_parameter('auto_start_camera_bridge', True)
+        self._auto_start_camera_bridge = bool(
+            self.get_parameter('auto_start_camera_bridge').value)
+        self._camera_bridge_proc: Optional[subprocess.Popen] = None
+        self._camera_info_bridge_proc: Optional[subprocess.Popen] = None
         from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-        # Los bridges de sensores (ros_gz_image image_bridge y el parameter_bridge
-        # del LiDAR) publican con perfil sensor_data = BEST_EFFORT. Un subscriber
-        # RELIABLE es INCOMPATIBLE con ese publisher y no recibe ningún mensaje,
-        # por eso la cámara web se quedaba en "Sin señal". Igualamos a BEST_EFFORT.
-        _cam_qos = QoSProfile(
+        # ros_gz_image/image_bridge anuncia Image como RELIABLE en Jazzy. El
+        # LiDAR sigue siendo un sensor stream donde BEST_EFFORT es preferible.
+        _image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        _sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
@@ -284,13 +322,39 @@ class MissionController(Node):
             Image,
             '/inspection/camera/image_raw',
             self._on_camera_image,
-            _cam_qos,
+            _image_qos,
         )
         self.create_subscription(
             Image,
             '/robot/sensors/inspection_camera/image',
             self._on_camera_image,
-            _cam_qos,
+            _image_qos,
+        )
+
+        # Cámara con detecciones YOLO superpuestas — la publica defect_detector
+        # (wind_tower_perception) en /inspection/detections/image_annotated con
+        # las cajas ya dibujadas. La UI ofrece un toggle para alternar entre el
+        # feed crudo y este. Si el detector no corre, el toggle cae al feed raw.
+        self._camera_jpeg_yolo: Optional[bytes] = None
+        self._detections_lock = threading.Lock()
+        self._detections: dict = {'count': 0, 'backend': '', 'items': [], 'stamp': 0.0}
+        self.create_subscription(
+            Image,
+            '/inspection/detections/image_annotated',
+            self._on_annotated_image,
+            _image_qos,
+        )
+        # Metadatos JSON de las detecciones (clase, score, bbox) para el HUD.
+        _det_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self.create_subscription(
+            String,
+            '/inspection/detections/text',
+            self._on_detections_text,
+            _det_qos,
         )
 
         # Nube de puntos LiDAR — downsampled para streaming web
@@ -300,7 +364,7 @@ class MissionController(Node):
             PointCloud2,
             '/velodyne_points',
             self._on_pointcloud,
-            _cam_qos,
+            _sensor_qos,
         )
 
         # URDF del robot — TRANSIENT_LOCAL para recibir el último valor publicado
@@ -324,6 +388,9 @@ class MissionController(Node):
         self.create_timer(1.0, self._publish_markers)
         self.create_timer(0.2, self._inspection_guard_tick)
         self.create_timer(0.5, self._progress_watchdog_tick)
+        self.create_timer(1.0, self._camera_bridge_watchdog_tick)
+        if self._auto_start_camera_bridge:
+            self._start_camera_bridges()
 
         self.get_logger().info('MissionController listo — web UI en http://localhost:5000')
 
@@ -378,43 +445,184 @@ class MissionController(Node):
             if _dist not in sys.path:
                 sys.path.insert(0, _dist)
 
+    def _imgmsg_to_jpeg(self, msg: Image) -> Optional[bytes]:
+        """Decodifica un sensor_msgs/Image a JPEG (BGR) para streaming web.
+
+        Devuelve None si el frame es inválido. Soporta rgb8/bgr8/bgra8/rgba8/
+        mono8 y maneja el padding por fila (msg.step) habitual en Gazebo.
+        """
+        self._ensure_cv2_path()
+        import cv2
+        import numpy as np
+        if msg.height == 0 or msg.width == 0 or not msg.data:
+            return None
+        enc = msg.encoding.lower()
+        # Bytes por píxel según encoding declarado (Gazebo suele publicar rgb8)
+        bpp = {'rgb8': 3, 'bgr8': 3, 'bgra8': 4, 'rgba8': 4, 'mono8': 1}.get(enc, 3)
+        data = bytes(msg.data)
+        arr = np.frombuffer(data, dtype=np.uint8)
+        # msg.step puede incluir padding por fila; se maneja antes de reshape
+        if msg.step >= msg.width * bpp and len(arr) == msg.step * msg.height:
+            raw = arr.reshape(msg.height, msg.step)[:, :msg.width * bpp].reshape(
+                msg.height, msg.width, bpp)
+        else:
+            raw = arr.reshape(msg.height, msg.width, bpp)
+        if enc in ('rgb8', 'rgb'):
+            frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+        elif enc == 'bgra8':
+            frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
+        elif enc == 'rgba8':
+            frame = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)
+        elif enc == 'mono8':
+            frame = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
+        else:
+            frame = raw  # bgr8
+        _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return buf.tobytes()
+
     def _on_camera_image(self, msg: Image):
         try:
-            self._ensure_cv2_path()
-            import cv2
-            import numpy as np
-            if msg.height == 0 or msg.width == 0 or not msg.data:
+            jpeg = self._imgmsg_to_jpeg(msg)
+            if jpeg is None:
                 return
-            enc = msg.encoding.lower()
-            # Bytes por píxel según encoding declarado (Gazebo suele publicar rgb8)
-            bpp = {'rgb8': 3, 'bgr8': 3, 'bgra8': 4, 'rgba8': 4, 'mono8': 1}.get(enc, 3)
-            data = bytes(msg.data)
-            arr = np.frombuffer(data, dtype=np.uint8)
-            # msg.step puede incluir padding por fila; se maneja antes de reshape
-            if msg.step >= msg.width * bpp and len(arr) == msg.step * msg.height:
-                raw = arr.reshape(msg.height, msg.step)[:, :msg.width * bpp].reshape(
-                    msg.height, msg.width, bpp)
-            else:
-                raw = arr.reshape(msg.height, msg.width, bpp)
-            if enc in ('rgb8', 'rgb'):
-                frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
-            elif enc == 'bgra8':
-                frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
-            elif enc == 'rgba8':
-                frame = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)
-            elif enc == 'mono8':
-                frame = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
-            else:
-                frame = raw  # bgr8
-            _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            now = self._now_sec()
             with self._camera_frame_lock:
-                self._camera_jpeg = buf.tobytes()
+                self._camera_jpeg = jpeg
+                self._camera_last_frame_time = now
+                self._camera_frame_total += 1
+                self._camera_fps_window_count += 1
+                elapsed = now - self._camera_fps_window_start
+                if elapsed >= 1.0:
+                    self._camera_fps = self._camera_fps_window_count / elapsed
+                    self._camera_fps_window_count = 0
+                    self._camera_fps_window_start = now
         except Exception as exc:  # noqa: BLE001
             self.get_logger().warn(f'Error codificando frame de camara: {exc}', throttle_duration_sec=5.0)
 
-    def get_camera_jpeg(self) -> Optional[bytes]:
+    def _on_annotated_image(self, msg: Image):
+        """Frame con detecciones YOLO ya dibujadas por defect_detector."""
+        try:
+            jpeg = self._imgmsg_to_jpeg(msg)
+            if jpeg is None:
+                return
+            with self._detections_lock:
+                self._camera_jpeg_yolo = jpeg
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warn(f'Error codificando frame YOLO: {exc}', throttle_duration_sec=5.0)
+
+    def _on_detections_text(self, msg: String):
+        """Metadatos JSON de detecciones (/inspection/detections/text)."""
+        try:
+            payload = json.loads(msg.data)
+        except (ValueError, TypeError):
+            return
+        items = payload.get('detections', []) or []
+        with self._detections_lock:
+            self._detections = {
+                'count': len(items),
+                'backend': payload.get('backend', ''),
+                'items': [
+                    {
+                        'class_id': d.get('class_id', '?'),
+                        'score': round(float(d.get('score', 0.0)), 2),
+                    }
+                    for d in items
+                ],
+                'stamp': payload.get('stamp_s', 0.0),
+            }
+
+    def get_camera_jpeg(self, *, require_fresh: bool = False) -> Optional[bytes]:
         with self._camera_frame_lock:
+            if require_fresh:
+                age = self._now_sec() - self._camera_last_frame_time
+                if self._camera_jpeg is None or age > CAMERA_STALE_SEC:
+                    return None
             return self._camera_jpeg
+
+    def get_camera_jpeg_yolo(self, *, require_fresh: bool = False) -> Optional[bytes]:
+        """Frame anotado YOLO; cae al frame crudo si el detector no publica."""
+        with self._detections_lock:
+            if self._camera_jpeg_yolo is not None:
+                return self._camera_jpeg_yolo
+        return self.get_camera_jpeg(require_fresh=require_fresh)
+
+    def get_detections(self) -> dict:
+        with self._detections_lock:
+            return dict(self._detections)
+
+    def _start_camera_bridges(self):
+        if self._camera_bridge_proc is None or self._camera_bridge_proc.poll() is not None:
+            self._camera_bridge_proc = subprocess.Popen(
+                [
+                    'ros2', 'run', 'ros_gz_image', 'image_bridge',
+                    '/robot/sensors/inspection_camera/image',
+                    '--ros-args',
+                    '-r',
+                    '/robot/sensors/inspection_camera/image:=/inspection/camera/image_raw',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+            self.get_logger().info('Camera image bridge auto-started.')
+
+        if (
+            self._camera_info_bridge_proc is None
+            or self._camera_info_bridge_proc.poll() is not None
+        ):
+            self._camera_info_bridge_proc = subprocess.Popen(
+                [
+                    'ros2', 'run', 'ros_gz_bridge', 'parameter_bridge',
+                    '/robot/sensors/inspection_camera/image/camera_info'
+                    '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
+                    '--ros-args',
+                    '-r',
+                    '/robot/sensors/inspection_camera/image/camera_info:='
+                    '/inspection/camera/camera_info',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.STDOUT,
+            )
+            self.get_logger().info('Camera info bridge auto-started.')
+
+    def _camera_bridge_watchdog_tick(self):
+        if not self._auto_start_camera_bridge:
+            return
+        self._start_camera_bridges()
+
+    def _stop_camera_bridges(self):
+        for proc in (self._camera_bridge_proc, self._camera_info_bridge_proc):
+            if proc is None or proc.poll() is not None:
+                continue
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def get_camera_status(self) -> dict:
+        now = self._now_sec()
+        with self._camera_frame_lock:
+            age = now - self._camera_last_frame_time if self._camera_last_frame_time else None
+            fresh = age is not None and age <= CAMERA_STALE_SEC
+            return {
+                'fresh': fresh,
+                'age_s': round(age, 2) if age is not None else None,
+                'fps': round(self._camera_fps, 1),
+                'frames': self._camera_frame_total,
+                'auto_bridge': self._auto_start_camera_bridge,
+                'bridge_running': (
+                    self._camera_bridge_proc is not None
+                    and self._camera_bridge_proc.poll() is None
+                ),
+                'camera_info_bridge_running': (
+                    self._camera_info_bridge_proc is not None
+                    and self._camera_info_bridge_proc.poll() is None
+                ),
+            }
+
+    def destroy_node(self):
+        self._stop_camera_bridges()
+        super().destroy_node()
 
     def _on_pointcloud(self, msg: PointCloud2):
         import struct
@@ -1069,6 +1277,10 @@ class MissionController(Node):
             self._arm_pause_saw_false = False
             self._arm_pause_completed = False
             self._arm_pause_start_s = self._now_sec()
+            # Re-anclaje AMCL: reseteamos el contador de actualizaciones
+            # nomotion para esta parada.
+            self._arm_pause_nomotion_calls = 0
+            self._arm_pause_last_nomotion_s = 0.0
             self._status = (
                 f'INSPECTING punto {point_no}/{total} '
                 f'(x={x:.2f}, y={y:.2f}) — esperando sweep brazo '
@@ -1108,37 +1320,66 @@ class MissionController(Node):
             self._arm_pause_completed = True
 
     def _inspection_pause_tick(self):
-        """Polling: avanza cuando se completa el doble flanco, o timeout."""
+        """Polling: avanza cuando se completa el doble flanco, o timeout.
+
+        Ademas, mientras el robot esta parado, re-ancla AMCL disparando
+        /request_nomotion_update unas pocas veces: el filtro re-pesa
+        particulas contra el laser SIN que la odometria (que slippea en la
+        superficie cilindrica) meta deriva. Asi cada parada resetea el error
+        de localizacion acumulado en lugar de dejarlo crecer a lo largo del
+        tubo (que es lo que disparaba el guard al final del recorrido).
+        """
+        do_nomotion = False
+        advance = False
         with self._lock:
             if not self._inspection_active or not self._inspection_paused:
                 if self._inspection_pause_timer is not None:
                     self._inspection_pause_timer.cancel()
                     self._inspection_pause_timer = None
                 return
-            elapsed = self._now_sec() - self._arm_pause_start_s
+            now = self._now_sec()
+            elapsed = now - self._arm_pause_start_s
+            # Re-anclaje AMCL: tras un breve settle (robot ya quieto), N
+            # actualizaciones nomotion repartidas al inicio de la pausa.
+            if (
+                elapsed >= INSP_NOMOTION_SETTLE_S
+                and self._arm_pause_nomotion_calls < INSP_NOMOTION_MAX_CALLS
+                and (now - self._arm_pause_last_nomotion_s) >= INSP_NOMOTION_PERIOD_S
+            ):
+                self._arm_pause_nomotion_calls += 1
+                self._arm_pause_last_nomotion_s = now
+                do_nomotion = True
             done = self._arm_pause_completed
             timed_out = elapsed >= INSP_ARM_TIMEOUT_S
-            if not done and not timed_out:
-                return  # seguimos esperando
-            if timed_out and not done:
-                # Registra el fallo y sigue (no aborta la misión).
-                x, y = self._inspection_points[self._inspection_index]
-                phase = (
-                    'sweep no inició' if not self._arm_pause_saw_false
-                    else 'sweep no terminó'
-                )
-                self.get_logger().warn(
-                    f'Arm sweep timeout ({INSP_ARM_TIMEOUT_S:.0f}s, '
-                    f'{phase}) en punto y={y:.2f}; sigo al siguiente.'
-                )
-                self._arm_pause_failures.append({
-                    'point_index': self._inspection_index,
-                    'x': float(x),
-                    'y': float(y),
-                    'reason': f'arm_sweep_timeout ({phase})',
-                })
-        # Llama fuera del lock para no anidar en _finish.
-        self._finish_inspection_pause()
+            if done or timed_out:
+                advance = True
+                if timed_out and not done:
+                    # Registra el fallo y sigue (no aborta la misión).
+                    x, y = self._inspection_points[self._inspection_index]
+                    phase = (
+                        'sweep no inició' if not self._arm_pause_saw_false
+                        else 'sweep no terminó'
+                    )
+                    self.get_logger().warn(
+                        f'Arm sweep timeout ({INSP_ARM_TIMEOUT_S:.0f}s, '
+                        f'{phase}) en punto y={y:.2f}; sigo al siguiente.'
+                    )
+                    self._arm_pause_failures.append({
+                        'point_index': self._inspection_index,
+                        'x': float(x),
+                        'y': float(y),
+                        'reason': f'arm_sweep_timeout ({phase})',
+                    })
+
+        # Fuera del lock: el servicio puede bloquear hasta 0.1 s y _finish
+        # vuelve a tomar el lock.
+        if do_nomotion:
+            self._call_empty_service_if_available(
+                self._nomotion_update_cli,
+                '/request_nomotion_update',
+            )
+        if advance:
+            self._finish_inspection_pause()
 
     def _finish_inspection_pause(self):
         with self._lock:
@@ -1191,26 +1432,34 @@ class MissionController(Node):
                 or self._inspection_approach_index < len(self._inspection_approach)
             ):
                 return
-            lateral_error = self._robot_x - INSP_CENTER_X
             roll = self._imu_roll_deg
             pitch = self._imu_pitch_deg
+            # Backstop AMCL (holgado): solo por si el robot esta REALMENTE
+            # perdido. No es el disparador fino (robot_x deriva en el tubo).
+            lateral_error = self._robot_x - INSP_CENTER_X
             handle = self._active_goal_handle
 
+            # Desvio de la linea de inspeccion: el roll (gravedad, sin deriva)
+            # mide cuanto ha subido el robot por la pared curva. Lo convertimos
+            # a metros para el log: desvio ≈ R·sin(roll).
+            lateral_from_roll = CYL_RADIUS_M * math.sin(math.radians(roll))
+
             reason = ''
-            if abs(lateral_error) > INSP_MAX_LATERAL_ERROR:
+            if abs(roll) > INSP_MAX_ROLL_DEG:
                 reason = (
-                    f'desvio lateral {lateral_error:+.2f} m '
-                    f'(limite {INSP_MAX_LATERAL_ERROR:.2f} m)'
-                )
-            elif abs(roll) > INSP_MAX_ROLL_DEG:
-                reason = (
-                    f'IMU roll {roll:+.1f} deg '
+                    f'desvio de linea: roll {roll:+.1f} deg '
+                    f'≈ {lateral_from_roll:+.2f} m lateral '
                     f'(limite {INSP_MAX_ROLL_DEG:.1f} deg)'
                 )
             elif abs(pitch) > INSP_MAX_PITCH_DEG:
                 reason = (
                     f'IMU pitch {pitch:+.1f} deg '
                     f'(limite {INSP_MAX_PITCH_DEG:.1f} deg)'
+                )
+            elif abs(lateral_error) > INSP_MAX_LATERAL_ERROR:
+                reason = (
+                    f'backstop AMCL: desvio lateral {lateral_error:+.2f} m '
+                    f'(limite {INSP_MAX_LATERAL_ERROR:.2f} m)'
                 )
 
             if not reason:
@@ -1675,6 +1924,60 @@ class MissionController(Node):
             if self._mission_queue:
                 self._status += '; cola pausada'
 
+    def stop_inspection(self) -> dict:
+        """Detiene la inspección en curso y dispara el informe de la última run.
+
+        Pensado para el botón "PARAR + INFORME": a diferencia del E-STOP
+        (cancel), está diseñado para cortar una inspección a mitad —p.ej.
+        tras un par de vueltas— y lanzar el MISMO pipeline de informe
+        (resumen + mapa + Gemini) que corre al terminar una inspección
+        completa, sobre la carpeta run_* más reciente.
+        """
+        with self._lock:
+            was_active = self._inspection_active
+            handle = self._active_goal_handle
+            future = self._active_send_goal_future
+            self._mission_generation += 1
+            self._active_goal_handle = None
+            self._active_goal_kind = None
+            self._active_send_goal_future = None
+            self._active_queue_item = None
+            self._queue_paused = bool(self._mission_queue)
+            self._reset_stuck_recovery_locked()
+            self._reset_relocalization_locked()
+            self._reset_charging_search_locked()
+        if future is not None and not future.done():
+            future.cancel()
+        if handle is not None:
+            self.get_logger().info('STOP inspección: cancelando goal Nav2 activo')
+            handle.cancel_goal_async()
+        for _ in range(3):
+            self._publish_recovery_cmd()
+        with self._lock:
+            self._reset_inspection()
+            self._moving = False
+            self._dest = 'idle'
+            self._status = (
+                'Inspección detenida por el usuario — generando informe…'
+                if was_active else
+                'Sin inspección activa — genero informe de la última run…'
+            )
+        # Dispara el informe sobre la última carpeta run_* (igual que al terminar
+        # una inspección completa). Usa la misma run en curso aunque sea parcial.
+        self._trigger_report_generation()
+        with self._lock:
+            run_id = self._report_run_id
+            report_status = self._report_status
+        self._publish_inspection_state(
+            'INSPECTION_STOPPED_BY_USER',
+            f'report={report_status} run={run_id}',
+        )
+        return {
+            'was_active': was_active,
+            'report_run_id': run_id,
+            'report_status': report_status,
+        }
+
     def _send_to(self, wp: dict):
         self._send_pose_goal(
             self._pose(wp['x'], wp['y'], wp.get('yaw', 0.0)),
@@ -1970,6 +2273,70 @@ class MissionController(Node):
         candidates.sort(key=lambda p: p.name, reverse=True)
         return candidates[0]
 
+    def get_defect_gallery(self, limit: int = 3) -> list:
+        """Return the latest unique captured defect frames from inspection runs."""
+        try:
+            candidates = [
+                p for p in INSPECTIONS_ROOT.iterdir()
+                if p.is_dir() and p.name.startswith('run_')
+            ]
+        except FileNotFoundError:
+            return []
+
+        def _sort_key(path: Path):
+            try:
+                return path.stat().st_mtime
+            except OSError:
+                return 0.0
+
+        gallery = []
+        seen = set()
+        candidates.sort(key=_sort_key, reverse=True)
+        for run_dir in candidates:
+            detections_path = run_dir / 'detections.ndjson'
+            try:
+                lines = detections_path.read_text(encoding='utf-8').splitlines()
+            except OSError:
+                continue
+            for line in reversed(lines):
+                try:
+                    rec = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                rel = rec.get('image_path')
+                if not rel:
+                    continue
+                try:
+                    img_path = (run_dir / rel).resolve()
+                    run_root = run_dir.resolve()
+                except OSError:
+                    continue
+                if run_root not in img_path.parents or not img_path.is_file():
+                    continue
+                key = f'{run_dir.name}/{rel}'
+                if key in seen:
+                    continue
+                seen.add(key)
+                det = rec.get('detection') or {}
+                pose = rec.get('defect_cylindrical_pose') or {}
+                try:
+                    score = round(float(det.get('score', 0.0)), 2)
+                except (TypeError, ValueError):
+                    score = 0.0
+                gallery.append({
+                    'url': f'/inspections/{run_dir.name}/{rel}',
+                    'run_id': run_dir.name,
+                    'frame_index': rec.get('frame_index'),
+                    'captured_at': rec.get('wall_clock_iso', ''),
+                    'class_id': det.get('class_id', '?'),
+                    'score': score,
+                    'x_axial_m': pose.get('x_axial_m'),
+                    'theta_surface_deg': pose.get('theta_surface_deg'),
+                })
+                if len(gallery) >= limit:
+                    return gallery
+        return gallery
+
     def _trigger_report_generation(self):
         """Lanza generate_inspection_report en un hilo al terminar la inspección."""
         run_dir = self._latest_run_dir()
@@ -1991,6 +2358,7 @@ class MissionController(Node):
             self._report_summary_md = ''
             self._report_full_md = ''
             self._report_has_defect_map = False
+            self._report_has_pdf = False
             self._report_message = 'Generando resumen e informe…'
             self._report_started_at = self._now_sec()
             self._report_thread = threading.Thread(
@@ -2028,6 +2396,7 @@ class MissionController(Node):
         summary_path = report_dir / 'inspection_summary.md'
         report_path = report_dir / 'inspection_report.md'
         defect_map_path = report_dir / 'defect_map.png'
+        pdf_path = report_dir / 'inspection_report.pdf'
 
         summary_md = ''
         report_md = ''
@@ -2066,7 +2435,10 @@ class MissionController(Node):
             self._report_summary_md = summary_md
             self._report_full_md = report_md
             self._report_has_defect_map = defect_map_path.is_file()
+            self._report_has_pdf = pdf_path.is_file()
             self._report_message = message
+            if status == 'done' and self._report_has_pdf:
+                self._report_message = 'Informe generado correctamente (PDF disponible).'
 
         log = self.get_logger().info if status != 'error' else self.get_logger().error
         log(f'[report] {status}: {message}')
@@ -2101,6 +2473,8 @@ class MissionController(Node):
                 'queue_active': dict(self._active_queue_item) if self._active_queue_item else None,
                 'queue_pending': [dict(item) for item in self._mission_queue],
                 'queue_paused': self._queue_paused,
+                'detections': self.get_detections(),
+                'camera': self.get_camera_status(),
                 'report': {
                     'status': self._report_status,
                     'run_id': self._report_run_id,
@@ -2110,6 +2484,11 @@ class MissionController(Node):
                     'defect_map_url': (
                         f'/inspections/{self._report_run_id}/report/defect_map.png'
                         if self._report_has_defect_map and self._report_run_id
+                        else ''
+                    ),
+                    'pdf_url': (
+                        f'/inspections/{self._report_run_id}/report/inspection_report.pdf'
+                        if self._report_has_pdf and self._report_run_id
                         else ''
                     ),
                     'run_url': (
@@ -2159,9 +2538,10 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 /* ─── LAYOUT ─── */
 .main{padding:14px 18px;display:grid;gap:12px;max-width:1700px;margin:0 auto}
 .viz-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;height:370px}
-.ctrl-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.ctrl-row{display:grid;grid-template-columns:minmax(260px,.9fr) minmax(300px,1fr) minmax(300px,1fr);gap:12px}
 @media(max-width:1100px){.viz-row{grid-template-columns:1fr 1fr;height:auto}.viz-row .panel:last-child{grid-column:1/-1}}
-@media(max-width:700px){.viz-row,.ctrl-row{grid-template-columns:1fr}.viz-row{height:auto}}
+@media(max-width:1200px){.ctrl-row{grid-template-columns:1fr 1fr}.ctrl-row .panel:first-child{grid-column:1/-1}}
+@media(max-width:700px){.viz-row,.ctrl-row{grid-template-columns:1fr}.viz-row{height:auto}.ctrl-row .panel:first-child{grid-column:auto}}
 
 /* ─── PANELS ─── */
 .panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:2px;overflow:hidden;display:flex;flex-direction:column}
@@ -2181,6 +2561,18 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .cam-feed{width:100%;height:100%;object-fit:contain;background:#020508;display:block}
 .cam-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);transition:background .5s,box-shadow .5s;flex-shrink:0}
 .cam-dot.live{background:var(--green);box-shadow:0 0 8px var(--green)}
+.cam-toggle{margin-left:auto;display:flex;align-items:center;gap:8px}
+.yolo-btn{font-family:var(--font-ui);font-weight:700;font-size:.62rem;letter-spacing:1.5px;padding:3px 9px;border-radius:3px;border:1px solid var(--cyan-dim);background:#030710;color:var(--dim);cursor:pointer;text-transform:uppercase;transition:color .2s,background .2s,box-shadow .2s}
+.yolo-btn:hover{color:var(--cyan)}
+.yolo-btn.on{color:#040910;background:var(--amber);border-color:var(--amber);box-shadow:0 0 10px rgba(255,107,0,.5)}
+.det-overlay{position:absolute;left:10px;bottom:8px;font-family:var(--font-mono);font-size:.64rem;line-height:1.55;color:var(--text);background:rgba(4,9,16,.72);border:1px solid var(--border);border-left:2px solid var(--amber);border-radius:2px;padding:5px 9px;max-width:64%;pointer-events:none;display:none;backdrop-filter:blur(2px)}
+.det-overlay.on{display:block}
+.det-overlay .det-hd{color:var(--amber);font-weight:700;letter-spacing:1px;margin-bottom:2px;text-transform:uppercase}
+.det-overlay .det-row{color:var(--cyan);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.det-overlay .det-empty{color:var(--dim)}
+.det-scan{position:absolute;inset:0;pointer-events:none;display:none;background:linear-gradient(180deg,transparent,rgba(255,107,0,.07) 50%,transparent);background-size:100% 10px;animation:detscan 2.4s linear infinite;mix-blend-mode:screen}
+.det-scan.on{display:block}
+@keyframes detscan{0%{background-position:0 0}100%{background-position:0 100%}}
 
 /* ─── MAP ─── */
 #map-canvas{width:100%;height:100%;display:block}
@@ -2194,6 +2586,24 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .status-readout{padding:8px 12px;font-family:var(--font-mono);font-size:.78rem;line-height:1.6;color:var(--text);border-top:1px solid var(--border);flex:1;overflow-y:auto}
 .alarm-bar{margin:0 12px 10px;padding:7px 11px;background:rgba(255,34,68,.08);border:1px solid rgba(255,34,68,.35);border-radius:2px;font-size:.78rem;color:var(--red);display:none}
 .alarm-bar.on{display:block}
+
+/* ─── ATTITUDE ─── */
+.att-body{padding:11px 12px;display:grid;grid-template-columns:138px 1fr;gap:12px;min-height:185px}
+.horizon{position:relative;aspect-ratio:1/1;border:1px solid var(--border);border-radius:3px;overflow:hidden;background:#020508}
+.horizon-plane{position:absolute;left:-35%;top:-35%;width:170%;height:170%;background:linear-gradient(180deg,rgba(0,207,255,.22) 0 49%,rgba(255,107,0,.2) 50% 100%);transform-origin:center;transition:transform .25s ease-out}
+.horizon::before{content:'';position:absolute;left:0;right:0;top:50%;border-top:1px solid rgba(255,255,255,.55);z-index:2}
+.horizon::after{content:'';position:absolute;left:50%;top:50%;width:42px;height:1px;background:var(--cyan);box-shadow:-18px 0 0 var(--cyan),18px 0 0 var(--cyan);transform:translate(-50%,-50%);z-index:3}
+.att-readouts{display:flex;flex-direction:column;gap:9px;justify-content:center;min-width:0}
+.axis-row{display:grid;grid-template-columns:44px 1fr 58px;gap:7px;align-items:center;font-family:var(--font-mono);font-size:.72rem}
+.axis-name{color:var(--dim);letter-spacing:1px}
+.axis-value{color:var(--cyan);text-align:right}
+.axis-track{position:relative;height:8px;background:#020508;border:1px solid var(--border);border-radius:2px;overflow:hidden}
+.axis-track::after{content:'';position:absolute;left:50%;top:0;bottom:0;border-left:1px solid rgba(255,255,255,.18)}
+.axis-fill{position:absolute;top:1px;bottom:1px;left:50%;width:0;background:var(--cyan);box-shadow:0 0 8px rgba(0,207,255,.55);transition:left .2s,width .2s}
+.axis-fill.neg{background:var(--amber);box-shadow:0 0 8px rgba(255,107,0,.45)}
+.yaw-compass{position:relative;height:28px;border:1px solid var(--border);background:#020508;border-radius:2px;overflow:hidden;margin-top:2px}
+.yaw-tape{position:absolute;left:0;top:0;height:100%;display:flex;align-items:center;gap:23px;padding:0 14px;color:var(--dim);font-family:var(--font-mono);font-size:.66rem;white-space:nowrap;transition:transform .25s ease-out}
+.yaw-mark{position:absolute;left:50%;top:0;bottom:0;border-left:2px solid var(--green);box-shadow:0 0 8px rgba(0,232,122,.55)}
 
 /* ─── COMMAND ─── */
 .cmd-section{padding:11px 12px;display:flex;flex-direction:column;gap:9px;flex:1}
@@ -2220,8 +2630,8 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .btn-clear:hover{background:rgba(130,30,130,.35)}
 
 /* ─── MISSION BUTTONS ─── */
-.mission-row{padding:11px 12px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1.8fr;gap:9px}
-@media(max-width:900px){.mission-row{grid-template-columns:1fr 1fr}.btn-estop{grid-column:1/-1}}
+.mission-row{padding:11px 12px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1.5fr 1.5fr;gap:9px}
+@media(max-width:900px){.mission-row{grid-template-columns:1fr 1fr}.btn-stopinsp,.btn-estop{grid-column:1/-1}}
 .mbtn{padding:14px 7px;border:1px solid;border-radius:2px;font-family:var(--font-ui);font-weight:700;font-size:.82rem;letter-spacing:.5px;text-transform:uppercase;cursor:pointer;transition:filter .15s,transform .1s;display:flex;flex-direction:column;align-items:center;gap:3px;line-height:1.3;width:100%}
 .mbtn:hover{filter:brightness(1.3)}.mbtn:active{transform:scale(.97)}
 .mbtn .sub{font-size:.6rem;opacity:.65;font-weight:400;letter-spacing:0}
@@ -2231,6 +2641,8 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .btn-p{background:rgba(55,20,75,.35);border-color:#3a1055;color:#c080ff}
 .btn-estop{background:rgba(130,0,18,.25);border-color:rgba(255,34,68,.4);color:var(--red);letter-spacing:1.5px;font-size:.85rem;box-shadow:0 0 18px rgba(255,34,68,.08)}
 .btn-estop:hover{background:rgba(180,0,25,.4);box-shadow:0 0 28px rgba(255,34,68,.25)}
+.btn-stopinsp{background:rgba(80,55,0,.3);border-color:rgba(255,176,0,.45);color:var(--amber);letter-spacing:1px;font-size:.82rem;box-shadow:0 0 16px rgba(255,176,0,.07)}
+.btn-stopinsp:hover{background:rgba(120,82,0,.42);box-shadow:0 0 26px rgba(255,176,0,.22)}
 
 /* ─── REPORT ─── */
 .report-body{padding:13px}
@@ -2256,6 +2668,16 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 .md th{background:#0a1828;color:var(--cyan)}.md strong{color:#fff}
 .md details{margin:9px 0;background:#07101e;border:1px solid var(--border);border-radius:3px;padding:7px 11px}
 .md details summary{cursor:pointer;color:var(--cyan);font-weight:700}
+
+/* ─── DEFECT GALLERY ─── */
+.gallery-body{padding:11px 12px}
+.def-gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;min-height:126px}
+.def-card{border:1px solid var(--border);border-radius:3px;background:#030710;overflow:hidden;min-width:0}
+.def-card img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#020508}
+.def-meta{padding:6px 8px;font-family:var(--font-mono);font-size:.68rem;line-height:1.45;color:var(--dim)}
+.def-meta strong{color:var(--amber);font-weight:700}
+.def-empty{font-family:var(--font-mono);font-size:.78rem;color:var(--dim);padding:14px 0}
+@media(max-width:800px){.def-gallery{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -2301,11 +2723,20 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       <div class="panel-hd">
         <div id="cam-dot" class="cam-dot"></div>
         <span class="panel-title">Camara Inspección</span>
-        <a href="/api/snapshot" target="_blank" class="panel-sub" style="color:var(--dim);text-decoration:none" title="Snapshot">⬡</a>
+        <span id="cam-status" class="panel-sub">WAIT</span>
+        <div class="cam-toggle">
+          <button id="yolo-btn" class="yolo-btn" title="Detección de defectos YOLO">YOLO</button>
+          <a href="/api/snapshot" target="_blank" class="panel-sub" style="color:var(--dim);text-decoration:none;margin:0" title="Snapshot">⬡</a>
+        </div>
       </div>
       <div class="panel-body">
         <img id="camera-feed" class="cam-feed" src="/video_feed" alt="Sin señal"
-             onerror="this._t=setTimeout(()=>{this.src='/video_feed?t='+Date.now()},2000)">
+             onerror="this._t=setTimeout(()=>{var y=document.getElementById('yolo-btn');this.src=(y&&y.classList.contains('on')?'/video_feed?yolo=1&t=':'/video_feed?t=')+Date.now()},2000)">
+        <div id="det-scan" class="det-scan"></div>
+        <div id="det-overlay" class="det-overlay">
+          <div class="det-hd">Defectos <span id="det-count">0</span> · <span id="det-backend">—</span></div>
+          <div id="det-list"></div>
+        </div>
       </div>
     </div>
 
@@ -2338,6 +2769,39 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       </div>
       <div id="alarm-bar" class="alarm-bar"></div>
       <div id="status-readout" class="status-readout">{{ s.status }}</div>
+    </div>
+
+    <div class="panel" style="min-height:200px">
+      <div class="panel-hd">
+        <span class="panel-title">Actitud R/P/Y</span>
+        <span id="att-status" class="panel-sub">IMU + AMCL</span>
+      </div>
+      <div class="att-body">
+        <div class="horizon"><div id="horizon-plane" class="horizon-plane"></div></div>
+        <div class="att-readouts">
+          <div class="axis-row">
+            <span class="axis-name">ROLL</span>
+            <span class="axis-track"><span id="roll-fill" class="axis-fill"></span></span>
+            <span id="roll-val" class="axis-value">0.0°</span>
+          </div>
+          <div class="axis-row">
+            <span class="axis-name">PITCH</span>
+            <span class="axis-track"><span id="pitch-fill" class="axis-fill"></span></span>
+            <span id="pitch-val" class="axis-value">0.0°</span>
+          </div>
+          <div class="axis-row">
+            <span class="axis-name">YAW</span>
+            <span class="axis-track"><span id="yaw-fill" class="axis-fill"></span></span>
+            <span id="yaw-val" class="axis-value">0.0°</span>
+          </div>
+          <div class="yaw-compass">
+            <div id="yaw-tape" class="yaw-tape">
+              <span>N</span><span>45</span><span>E</span><span>135</span><span>S</span><span>225</span><span>W</span><span>315</span><span>N</span>
+            </div>
+            <div class="yaw-mark"></div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div style="display:flex;flex-direction:column;gap:12px">
@@ -2389,6 +2853,9 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       <form method="post" action="/cmd" style="display:contents">
         <button class="mbtn btn-p" name="cmd" value="start_inspection">🔍 INSP.<span class="sub">Tramo completo</span></button>
       </form>
+      <form method="post" action="/stop_inspection" style="display:contents">
+        <button class="mbtn btn-stopinsp" type="submit">⏹ PARAR + INFORME<span class="sub">Corta y genera PDF</span></button>
+      </form>
       <form method="post" action="/cancel" style="display:contents">
         <button class="mbtn btn-estop" type="submit">⚠ E-STOP — CANCELAR</button>
       </form>
@@ -2396,6 +2863,17 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
   </div>
 
   <!-- ── INSPECTION REPORT ── -->
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-title">Últimos Defectos Capturados</span>
+      <span id="gallery-badge" class="panel-sub">0 fotos</span>
+    </div>
+    <div class="gallery-body">
+      <div id="def-gallery" class="def-gallery"></div>
+      <div id="def-empty" class="def-empty">Aún no hay capturas con defectos guardadas.</div>
+    </div>
+  </div>
+
   <div class="panel">
     <div class="panel-hd">
       <span class="panel-title">Informe de Inspección</span>
@@ -2407,7 +2885,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
       <div id="report-map" style="display:none"><img id="report-map-img" alt="Mapa defectos"></div>
       <div id="report-summary" class="md"></div>
       <div id="report-full" class="md"></div>
-      <div id="report-empty" class="report-empty">Aún no hay informe. Se generará automáticamente al terminar una inspección.</div>
+      <div id="report-empty" class="report-empty">Aún no hay informe. Se genera al terminar una inspección o al pulsar «PARAR + INFORME».</div>
     </div>
   </div>
 
@@ -2716,8 +3194,38 @@ import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.1/src/URDF
 // ═══════════════════════════════════════════════════════
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function battCol(v){return v>50?'#00e87a':v>20?'#ff6b00':'#ff2244';}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
 
 const RL={idle:'SIN DATOS',running:'GENERANDO',done:'COMPLETO',done_no_llm:'PARCIAL',error:'ERROR'};
+
+function setAxis(id,value,maxAbs,display){
+  const fill=document.getElementById(id+'-fill'),val=document.getElementById(id+'-val');
+  const v=Number.isFinite(value)?value:0;
+  const pct=clamp(Math.abs(v)/maxAbs,0,1)*50;
+  if(fill){
+    fill.classList.toggle('neg',v<0);
+    fill.style.width=pct+'%';
+    fill.style.left=(v<0?(50-pct):50)+'%';
+  }
+  if(val)val.textContent=display;
+}
+
+function updateAttitude(s){
+  const roll=Number(s.imu_roll_deg||0);
+  const pitch=Number(s.imu_pitch_deg||0);
+  const yawRad=Number(s.robot_yaw||0);
+  const yawDeg=((yawRad*180/Math.PI)%360+360)%360;
+  const yawSigned=yawDeg>180?yawDeg-360:yawDeg;
+  setAxis('roll',roll,45,roll.toFixed(1)+'°');
+  setAxis('pitch',pitch,45,pitch.toFixed(1)+'°');
+  setAxis('yaw',yawSigned,180,yawDeg.toFixed(1)+'°');
+  const hp=document.getElementById('horizon-plane');
+  if(hp)hp.style.transform=`rotate(${-roll}deg) translateY(${clamp(pitch,-35,35)*1.15}px)`;
+  const tape=document.getElementById('yaw-tape');
+  if(tape)tape.style.transform=`translateX(${-(yawDeg/360)*210}px)`;
+  const st=document.getElementById('att-status');
+  if(st)st.textContent=`R ${roll.toFixed(1)} · P ${pitch.toFixed(1)} · Y ${yawDeg.toFixed(1)}`;
+}
 
 function renderMd(src){
   if(!src)return'';
@@ -2760,6 +3268,13 @@ function renderState(s) {
 
   document.getElementById('dest-badge').textContent=s.destination||'idle';
   document.getElementById('status-readout').textContent=s.status||'';
+  const cam=s.camera||{},cd=document.getElementById('cam-dot'),cs=document.getElementById('cam-status');
+  if(cd)cd.classList.toggle('live',!!cam.fresh);
+  if(cs){
+    if(cam.fresh)cs.textContent=(cam.fps||0).toFixed(1)+' FPS';
+    else if(cam.bridge_running)cs.textContent='BRIDGE · SIN FRAMES';
+    else cs.textContent='BRIDGE OFF';
+  }
   document.getElementById('pose-x').textContent=s.robot_x!=null?s.robot_x.toFixed(3)+' m':'—';
   document.getElementById('pose-y').textContent=s.robot_y!=null?s.robot_y.toFixed(3)+' m':'—';
   document.getElementById('pose-yaw').textContent=s.robot_yaw!=null?((s.robot_yaw*180/Math.PI).toFixed(1))+'°':'—';
@@ -2790,6 +3305,7 @@ function renderState(s) {
 
   if(window._updateRobot3D)window._updateRobot3D(s);
   if(window._updateMap)window._updateMap(s);
+  updateAttitude(s);
   renderReport(s.report);
 }
 
@@ -2801,6 +3317,7 @@ function renderReport(r){
   badge.textContent=RL[status]||status;
   document.getElementById('report-msg').textContent=r.message||'';
   const links=[];
+  if(r.pdf_url)links.push(`<a href="${esc(r.pdf_url)}" target="_blank">📄 Descargar PDF</a>`);
   if(r.run_url)links.push(`<a href="${esc(r.run_url)}" target="_blank">Carpeta run</a>`);
   if(r.defect_map_url)links.push(`<a href="${esc(r.defect_map_url)}" target="_blank">Mapa defectos</a>`);
   document.getElementById('report-links').innerHTML=links.join(' ');
@@ -2817,15 +3334,65 @@ async function pollState(){
 async function pollPC(){
   try{const r=await fetch('/api/pointcloud',{cache:'no-store'});if(r.ok&&window._updatePC)window._updatePC(await r.json());}catch(e){}
 }
+function renderGallery(items){
+  items=Array.isArray(items)?items:[];
+  const wrap=document.getElementById('def-gallery'),empty=document.getElementById('def-empty'),badge=document.getElementById('gallery-badge');
+  if(badge)badge.textContent=items.length+' fotos';
+  if(!wrap||!empty)return;
+  if(!items.length){wrap.innerHTML='';empty.style.display='block';return;}
+  empty.style.display='none';
+  wrap.innerHTML=items.map((it,idx)=>{
+    const pose=(it.x_axial_m!=null&&it.theta_surface_deg!=null)
+      ? `<br>x=${Number(it.x_axial_m).toFixed(2)} m · θ=${Number(it.theta_surface_deg).toFixed(1)}°`
+      : '';
+    const score=Number(it.score||0);
+    return `<a class="def-card" href="${esc(it.url)}" target="_blank" style="text-decoration:none">
+      <img src="${esc(it.url)}?t=${encodeURIComponent(it.run_id||idx)}" alt="Defecto capturado">
+      <div class="def-meta"><strong>${esc(it.class_id||'?')}</strong> · ${(score*100).toFixed(0)}%<br>${esc(it.run_id||'run')} · frame ${esc(it.frame_index??'—')}${pose}</div>
+    </a>`;
+  }).join('');
+}
+async function pollGallery(){
+  try{const r=await fetch('/api/defect_gallery',{cache:'no-store'});if(r.ok)renderGallery(await r.json());}catch(e){}
+}
 
 pollState();setInterval(pollState,1000);
 setInterval(pollPC,250);
+pollGallery();setInterval(pollGallery,5000);
 
-// Camera dot
+// YOLO toggle + detección HUD
 (function(){
-  const dot=document.getElementById('cam-dot');
-  function chk(){fetch('/api/snapshot',{method:'HEAD',cache:'no-store'}).then(r=>dot.classList.toggle('live',r.ok)).catch(()=>dot.classList.remove('live'));}
-  chk();setInterval(chk,3000);
+  const btn=document.getElementById('yolo-btn');
+  const feed=document.getElementById('camera-feed');
+  const ov=document.getElementById('det-overlay');
+  const scan=document.getElementById('det-scan');
+  const cnt=document.getElementById('det-count');
+  const back=document.getElementById('det-backend');
+  const list=document.getElementById('det-list');
+  let on=false,pollId=null;
+  function setFeed(){feed.src=(on?'/video_feed?yolo=1&t=':'/video_feed?t=')+Date.now();}
+  async function pollDet(){
+    try{
+      const r=await fetch('/api/detections',{cache:'no-store'});
+      if(!r.ok)return;const d=await r.json();
+      cnt.textContent=d.count||0;
+      back.textContent=(d.backend||'—').toUpperCase();
+      if(d.items&&d.items.length){
+        list.innerHTML=d.items.slice(0,5).map(
+          i=>'<div class="det-row">▸ '+i.class_id+' · '+(i.score*100).toFixed(0)+'%</div>'
+        ).join('');
+      }else{list.innerHTML='<div class="det-empty">Sin defectos en frame</div>';}
+    }catch(e){}
+  }
+  btn.addEventListener('click',()=>{
+    on=!on;
+    btn.classList.toggle('on',on);
+    ov.classList.toggle('on',on);
+    scan.classList.toggle('on',on);
+    setFeed();
+    if(on){pollDet();pollId=setInterval(pollDet,800);}
+    else if(pollId){clearInterval(pollId);pollId=null;}
+  });
 })();
 
 // Command
@@ -2892,6 +3459,21 @@ def _flask_thread(node: MissionController):
         node.cancel()
         return redirect('/')
 
+    @app.route('/stop_inspection', methods=['POST'])
+    def stop_inspection():
+        result = node.stop_inspection()
+        wants_json = (
+            request.headers.get('X-Requested-With') == 'fetch'
+            or 'application/json' in request.headers.get('Accept', '')
+        )
+        if wants_json:
+            return jsonify(result)
+        return redirect('/')
+
+    @app.route('/api/stop_inspection', methods=['POST'])
+    def api_stop_inspection():
+        return jsonify(node.stop_inspection())
+
     @app.route('/clear_queue', methods=['POST'])
     def clear_queue():
         node.clear_queue()
@@ -2937,11 +3519,18 @@ def _flask_thread(node: MissionController):
         except Exception:
             abort(404)
 
-    def _mjpeg_generator():
-        """Genera un stream MJPEG con el ultimo frame de la camara."""
+    def _mjpeg_generator(yolo: bool = False):
+        """Genera un stream MJPEG con el ultimo frame de la camara.
+
+        Con yolo=True sirve el frame anotado por defect_detector; si el detector
+        no está publicando, get_camera_jpeg_yolo() cae automáticamente al crudo.
+        """
         _placeholder = None  # frame gris de 320x240 cuando no hay imagen
         while True:
-            jpeg = node.get_camera_jpeg()
+            jpeg = (
+                node.get_camera_jpeg_yolo(require_fresh=True)
+                if yolo else node.get_camera_jpeg(require_fresh=True)
+            )
             if jpeg is None:
                 # Genera placeholder gris si aun no hay frames
                 if _placeholder is None:
@@ -2966,14 +3555,27 @@ def _flask_thread(node: MissionController):
 
     @app.route('/video_feed')
     def video_feed():
+        yolo = request.args.get('yolo') in ('1', 'true', 'on')
         return Response(
-            _mjpeg_generator(),
+            _mjpeg_generator(yolo=yolo),
             mimetype='multipart/x-mixed-replace; boundary=frame',
         )
 
+    @app.route('/api/detections')
+    def api_detections():
+        return jsonify(node.get_detections())
+
+    @app.route('/api/camera_status')
+    def api_camera_status():
+        return jsonify(node.get_camera_status())
+
+    @app.route('/api/defect_gallery')
+    def api_defect_gallery():
+        return jsonify(node.get_defect_gallery())
+
     @app.route('/api/snapshot')
     def api_snapshot():
-        jpeg = node.get_camera_jpeg()
+        jpeg = node.get_camera_jpeg(require_fresh=True)
         if jpeg is None:
             abort(503)
         return Response(jpeg, mimetype='image/jpeg')
