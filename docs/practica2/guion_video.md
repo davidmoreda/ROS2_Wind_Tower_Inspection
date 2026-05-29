@@ -127,17 +127,6 @@ en el video NO se lanzan comandos en directo. Cada bloque indica **a donde enfoc
 
 ---
 
-## 6:30 - 7:00 -- Resultados y metricas `[P3]`
-
-**ENFOCAR: la tabla de metricas a pantalla completa.**
-
-> "Hemos medido varias metricas para cuantificar el comportamiento: el tiempo que tarda AMCL en
-> converger, el error cuadratico medio de la trayectoria frente a la referencia, el tiempo medio
-> en llegar a una meta, y la mas significativa para nosotros, el numero de abortos del arbol de
-> comportamiento en la rampa antes y despues del tuning. Como se ve en la tabla, el tuning del
-> controlador elimina practicamente esos abortos. Todos los valores estan detallados en la memoria."
-
----
 
 ## 7:00 - 7:30 -- Problemas resueltos y cierre `[P1]`
 
