@@ -84,9 +84,14 @@ INSP_PAUSE_SEC = 1.0
 INSP_ARM_TIMEOUT_S = 15.0   # sweep simple 360° ~8 s con velocity_scaling=0.15
                             # (8 waypoints + retorno a home módulo 2π).
 INSP_ARM_POLL_S    = 0.2
-INSP_MAX_LATERAL_ERROR = 1.2   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
-INSP_MAX_ROLL_DEG = 8.0        # gravedad vertical: roll casi plano en calle axial
+INSP_MAX_LATERAL_ERROR = 1.6   # m — tubo 4 m ancho, Husky 0.67 m; margen real para nav entre puntos
+INSP_MAX_ROLL_DEG = 18.0       # Husky muy estable; ~8 deg rozando pared NO es vuelco. Solo abortar ante inclinacion sostenida y grande
 INSP_MAX_PITCH_DEG = 20.0      # margen para transitorios, rampa y frenadas
+# Antirrebote del guard: la condicion debe mantenerse N ticks seguidos
+# (0.2 s/tick) antes de cancelar. Asi un pico transitorio al rozar una
+# pared (y recuperarse) no aborta la mision entera; solo una inclinacion
+# o desvio SOSTENIDO dispara la parada de seguridad.
+INSP_GUARD_STRIKES_REQUIRED = 5   # 5 x 0.2 s = 1.0 s sostenido
 TUBE_ROUTE_HALF_WIDTH = 1.25
 TUBE_ROUTE_MIN_Y = 6.5
 
@@ -158,6 +163,7 @@ class MissionController(Node):
         self._inspection_active = False
         self._inspection_paused = False
         self._inspection_guard_tripped = False
+        self._inspection_guard_strikes = 0
         self._inspection_returning = False
         self._inspection_pause_timer = None
         # Estado del brazo durante una parada de inspección.
@@ -784,6 +790,7 @@ class MissionController(Node):
         self._inspection_active = False
         self._inspection_paused = False
         self._inspection_guard_tripped = False
+        self._inspection_guard_strikes = 0
         self._inspection_returning = False
 
     def _reset_progress_watchdog_locked(self):
@@ -964,6 +971,7 @@ class MissionController(Node):
             self._inspection_points = points
             self._inspection_active = True
             self._inspection_guard_tripped = False
+            self._inspection_guard_strikes = 0
             self._status = (
                 f'Aproximando a inspeccion axial: {len(points)} paradas '
                 f'cada {INSP_STEP:.1f} m'
@@ -1149,6 +1157,7 @@ class MissionController(Node):
         self._inspection_active = False
         self._inspection_paused = False
         self._inspection_guard_tripped = False
+        self._inspection_guard_strikes = 0
         self._moving = False
         self._dest = 'idle'
         self._status = 'Inspeccion axial completada (ida + vuelta)'
@@ -1194,10 +1203,29 @@ class MissionController(Node):
                 )
 
             if not reason:
+                # Condicion normal: limpiamos los strikes acumulados para que
+                # los picos transitorios no se sumen entre paradas.
+                self._inspection_guard_strikes = 0
+                return
+
+            # Antirrebote: exigimos que la condicion se mantenga varios ticks
+            # seguidos antes de abortar. Un roce puntual con la pared (roll que
+            # sube y baja) no cancela la mision.
+            self._inspection_guard_strikes += 1
+            if self._inspection_guard_strikes < INSP_GUARD_STRIKES_REQUIRED:
+                self.get_logger().warn(
+                    f'Guardia inspeccion: {reason} '
+                    f'[{self._inspection_guard_strikes}/'
+                    f'{INSP_GUARD_STRIKES_REQUIRED} ticks; '
+                    f'aun no cancelo]'
+                )
                 return
 
             self._inspection_guard_tripped = True
-            self._status = f'Guardia inspeccion: cancelando por {reason}'
+            self._status = (
+                f'Guardia inspeccion: cancelando por {reason} '
+                f'(sostenido {self._inspection_guard_strikes} ticks)'
+            )
 
         self.get_logger().warn(self._status)
         self._publish_inspection_state('INSPECTION_GUARD_STOP', reason)
