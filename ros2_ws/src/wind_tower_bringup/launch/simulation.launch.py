@@ -37,10 +37,14 @@ ARGUMENTS = [
         default_value=[EnvironmentVariable('HOME'), '/clearpath/'],
         description='Ruta al directorio con robot.yaml de Clearpath',
     ),
-    DeclareLaunchArgument('x',   default_value='0.0',    description='Spawn X del robot'),
-    DeclareLaunchArgument('y',   default_value='25.0',   description='Spawn Y del robot'),
-    DeclareLaunchArgument('z',   default_value='0.3',    description='Spawn Z del robot'),
-    DeclareLaunchArgument('yaw', default_value='3.14159', description='Spawn yaw (rad) — mirando al sur hacia el tubo'),
+    # Spawn: dentro de la sala de carga (Y=22 a Y=30), mirando al sur (yaw=π)
+    # hacia la puerta central del separador norte y la rampa al tubo.
+    # NO usar Y=-10: ahí está roller_frame_south (8m × 1.5m × 0.8m) y el
+    # robot spawneaba encima del bastidor del virador sur.
+    DeclareLaunchArgument('x',   default_value='0.0',     description='Spawn X del robot'),
+    DeclareLaunchArgument('y',   default_value='25.0',    description='Spawn Y del robot'),
+    DeclareLaunchArgument('z',   default_value='0.3',     description='Spawn Z del robot'),
+    DeclareLaunchArgument('yaw', default_value='3.14159', description='Spawn yaw (rad) — π = mirando al sur hacia la rampa'),
 ]
 
 
@@ -105,6 +109,9 @@ def generate_launch_description():
             os.path.join(pkg_clearpath_gz, 'worlds'),
             os.path.join(pkg_clearpath_gz, 'meshes'),
             meshes_path,
+            # Models dir: Gazebo searches for model://X in directories that
+            # directly contain a folder named X with model.config inside.
+            os.path.join(pkg_wind_sim, 'models'),
         ] + packages_paths),
     )
 
@@ -128,6 +135,51 @@ def generate_launch_description():
         name='clock_bridge',
         output='screen',
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+    )
+
+    # Bridge SetEntityPose (servicio) + dynamic_pose/info (topic):
+    #  • set_pose: el nodo people_collision_sync mueve las cápsulas person_col_N.
+    #  • dynamic_pose/info → tf2_msgs/TFMessage: poses en vivo de los <actor>
+    #    animados (cada child_frame_id = actor_N) que el nodo sigue con las cápsulas.
+    # UserCommands + SceneBroadcaster ya están cargados en el mundo SDF.
+    set_pose_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='set_pose_bridge',
+        output='screen',
+        arguments=[
+            '/world/wind_tower_world/set_pose'
+            '@ros_gz_interfaces/srv/SetEntityPose',
+            '/world/wind_tower_world/dynamic_pose/info'
+            '@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
+        ],
+    )
+
+    # Nodo de sincronización personas-colisión.
+    # Los <actor> caminan (piernas animadas) por <trajectory> nativa; este nodo
+    # mueve una cápsula de colisión invisible (person_col_N) sobre cada actor_N
+    # para que el LiDAR VLP-16 / Nav2 los detecten. Sustituye a random_walk_people
+    # (que teletransportaba mallas estáticas vía gz-service y causaba parpadeo).
+    # Delay de 15 s para que Gazebo cargue todos los modelos antes del primer tick.
+    people_sync_node = TimerAction(
+        period=15.0,
+        actions=[
+            Node(
+                package='wind_tower_inspection_behaviour',
+                executable='people_collision_sync',
+                name='people_collision_sync',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': True,
+                    'world_name': 'wind_tower_world',
+                    'num_people': 12,
+                    'actor_prefix': 'actor_',
+                    'capsule_prefix': 'person_col_',
+                    'update_rate': 15.0,
+                    'capsule_z': 0.0,
+                }],
+            ),
+        ],
     )
 
     robot_description_relay = Node(
@@ -201,8 +253,8 @@ def generate_launch_description():
     )
 
     # Bridge cámara RGB de inspección montada en el TCP del UR5e.
-    # ros_gz_image convierte imágenes de Gazebo de forma más robusta que el
-    # parameter_bridge genérico; CameraInfo sigue usando ros_gz_bridge.
+    # Publica directamente en /inspection/camera/image_raw para evitar un relay
+    # intermedio con QoS incompatible con el stream de sensor.
     inspection_image_bridge = Node(
         package='ros_gz_image',
         executable='image_bridge',
@@ -211,17 +263,12 @@ def generate_launch_description():
         arguments=[
             '/robot/sensors/inspection_camera/image',
         ],
-    )
-
-    inspection_image_relay = Node(
-        package='topic_tools',
-        executable='relay',
-        name='inspection_image_relay',
-        output='screen',
-        arguments=[
-            '/robot/sensors/inspection_camera/image',
-            '/inspection/camera/image_raw',
+        remappings=[
+            ('/robot/sensors/inspection_camera/image',
+             '/inspection/camera/image_raw'),
         ],
+        respawn=True,
+        respawn_delay=5.0,
     )
 
     inspection_camera_info_bridge = Node(
@@ -236,6 +283,13 @@ def generate_launch_description():
         remappings=[
             ('/robot/sensors/inspection_camera/image/camera_info',
              '/inspection/camera/camera_info'),
+        ],
+    )
+    camera_bridges = TimerAction(
+        period=15.0,
+        actions=[
+            inspection_image_bridge,
+            inspection_camera_info_bridge,
         ],
     )
 
@@ -331,12 +385,11 @@ def generate_launch_description():
         set_gz_relay,
         gz_sim,
         clock_bridge,
+        set_pose_bridge,
         turner_cmd_bridge,
         turner_state_bridge,
         lidar3d_bridge,
-        inspection_image_bridge,
-        inspection_image_relay,
-        inspection_camera_info_bridge,
+        camera_bridges,
         robot_description_relay,
         tf_relay,
         tf_static_relay,
@@ -345,4 +398,5 @@ def generate_launch_description():
         robot_spawn,
         ekf_param_override,
         inspection_teleop_limits,
+        people_sync_node,
     ])

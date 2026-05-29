@@ -20,12 +20,19 @@ bt_navigator:
       - compute_path_error_code
       - follow_path_error_code
 
-# ── Controller Server (Regulated Pure Pursuit) ───────────────────────────────
+# ── Controller Server (DWB local planner) ────────────────────────────────────
 # RAMP-AWARE TUNING:
 #   La rampa norte tiene ~13° de pendiente. El límite principal observado es
 #   tracción, no potencia: si el robot acelera o frena fuerte, patina y AMCL/odom
 #   pierden coherencia. Priorizamos velocidad baja, aceleración suave y tiempos
 #   de progreso más amplios para subir sin cortar la referencia.
+#
+# DYNAMIC-OBSTACLE TUNING:
+#   RegulatedPurePursuit seguía el path global y aquí estaba con collision
+#   detection/cost scaling desactivado, así que el local costmap podía ver
+#   personas/carretilla pero el controller no generaba evasión lateral.
+#   DWB simula trayectorias locales contra el local_costmap y descarta las que
+#   chocan con obstáculos LiDAR. El global_costmap queda estático por diseño.
 controller_server:
   ros__parameters:
     use_sim_time: true
@@ -61,42 +68,60 @@ controller_server:
       yaw_goal_tolerance: 0.15
 
     FollowPath:
-      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
-      desired_linear_vel: 0.50          # subido 0.25→0.50: más error de vel → diff-drive aplica más par para superar pendiente
-      # ANTI-BANDAZOS: lookahead más largo → el carrot point queda lejos y las
-      # oscilaciones del path generan correcciones angulares más suaves.
-      lookahead_dist: 1.2               # era 0.9 → subido para suavizar seguimiento
-      min_lookahead_dist: 0.6           # era 0.4 → evita carrot muy cerca que amplifica ruido
-      max_lookahead_dist: 2.0           # era 1.5 → da más margen en rectas largas
-      lookahead_time: 1.5
-      # Velocidad angular de giro in-situ más baja → transiciones más suaves
-      rotate_to_heading_angular_vel: 0.5  # era 0.7
-      # Aumentado: el TF map→odom se retrasa ligeramente cuando el robot
-      # cabecea sobre la rampa; toleramos hasta 1 s para no abortar.
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: false
+
+      # Diff-drive Husky: solo vx y wz. Sin marcha atrás para no meter el robot
+      # hacia obstáculos que aparecen detrás durante una evasión.
+      min_vel_x: 0.0
+      max_vel_x: 0.50
+      min_vel_y: 0.0
+      max_vel_y: 0.0
+      max_vel_theta: 0.85
+      min_speed_xy: 0.0
+      max_speed_xy: 0.50
+      min_speed_theta: 0.0
+
+      # Mantiene la suavidad necesaria en la rampa y evita bandazos al esquivar.
+      acc_lim_x: 0.75
+      acc_lim_y: 0.0
+      acc_lim_theta: 0.8
+      decel_lim_x: -0.75
+      decel_lim_y: 0.0
+      decel_lim_theta: -0.8
+
+      vx_samples: 24
+      vy_samples: 1
+      vtheta_samples: 36
+      sim_time: 2.0
+      linear_granularity: 0.05
+      angular_granularity: 0.025
       transform_tolerance: 1.0
-      use_velocity_scaled_lookahead_dist: true
-      # Aproximacion lenta: evita patinar al frenar en la transicion superior.
-      min_approach_linear_velocity: 0.06
-      approach_velocity_scaling_dist: 0.9
-      use_collision_detection: false
-      max_allowed_time_to_collision_up_to_carrot: 1.2
-      # Mantenemos el regulador activo pero con límites más permisivos en
-      # curvatura para que no frene en mitad de la rampa cuando el plan
-      # tiene pequeñas oscilaciones por el cabeceo del robot.
-      use_regulated_linear_velocity_scaling: true
-      use_fixed_curvature_lookahead: false
-      curvature_lookahead_dist: 1.2        # consistente con lookahead_dist actualizado
-      use_cost_regulated_linear_velocity_scaling: false  # desactivado: ya no frena por coste de pared
-      regulated_linear_scaling_min_radius: 0.9   # era 0.6 → menos frenada en curvas (bandazos al acelerar tras curva)
-      regulated_linear_scaling_min_speed: 0.08   # permite subir muy despacio sin derrapar
-      # ANTI-BANDAZOS: ángulo umbral más alto → no activa giro in-situ para
-      # desviaciones pequeñas (el modo tracking puro aplica corrección más suave).
-      use_rotate_to_heading: true
-      allow_reversing: false
-      rotate_to_heading_min_angle: 1.05   # era 0.785 (45°) → ahora 60°: menos giros in-situ innecesarios
-      # ANTI-BANDAZOS: aceleración angular reducida → los cambios de w son más suaves
-      max_angular_accel: 1.2             # era 2.0 → reduce jerk angular brusco
-      max_robot_pose_search_dist: 10.0
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+
+      critics:
+        - RotateToGoal
+        - Oscillation
+        - BaseObstacle
+        - GoalAlign
+        - PathAlign
+        - PathDist
+        - GoalDist
+
+      # BaseObstacle + inflation local dan prioridad a separarse de objetos
+      # móviles/no mapeados; Path* queda por debajo para permitir rodeos locales.
+      BaseObstacle.scale: 0.8
+      PathAlign.scale: 8.0
+      PathAlign.forward_point_distance: 0.45
+      GoalAlign.scale: 6.0
+      GoalAlign.forward_point_distance: 0.45
+      PathDist.scale: 12.0
+      GoalDist.scale: 10.0
+      RotateToGoal.scale: 20.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
 
 # ── Smoother Server ───────────────────────────────────────────────────────────
 smoother_server:
@@ -202,35 +227,51 @@ local_costmap:
     ros__parameters:
       use_sim_time: true
       update_frequency: 10.0
-      publish_frequency: 5.0
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
+      # 5×5m: suficiente para DWB (sim_time 2.0s × max_vel 0.5 = 1.0m lookahead),
+      # menor que 8×8 reduce el smearing del rolling window y la latencia de raytrace.
       width:  5
       height: 5
       resolution: 0.05
       # Husky A200: 0.99 × 0.67 m — polígono rectangular
       footprint: "[[0.50, 0.34],[0.50, -0.34],[-0.50, -0.34],[-0.50, 0.34]]"
-      footprint_padding: 0.02
+      footprint_padding: 0.06
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: scan
-        scan:
-          topic: /scan
-          max_obstacle_height: 2.0
+        # Fuente: /obstacle_points, salida del nodo obstacle_cloud_filter. Ese nodo
+        # ya hace ground-removal consciente de pendiente (resta el suelo local por
+        # celda), así que la rampa de 13° NO llega aquí pero los objetos bajos y las
+        # paredes SÍ. Es nube 3D filtrada en 360° (mejor que el slice /scan, que se
+        # dejaba los objetos por debajo de 0.55 m). El min/max_obstacle_height de
+        # abajo va permisivo porque el filtrado de altura ya está hecho upstream.
+        observation_sources: obstacles
+        footprint_clearing_enabled: true
+        obstacles:
+          topic: /obstacle_points
+          max_obstacle_height: 2.5
+          min_obstacle_height: -1.0     # suelo ya eliminado por obstacle_cloud_filter
           clearing: true
           marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 4.0       # reducido: ventana rolling 5m, borra a 4m
+          data_type: "PointCloud2"
+          expected_update_rate: 8.0        # VLP-16 ~10 Hz; valor correcto para stale-detection
+          observation_persistence: 0.30   # 3 scans a 10 Hz: estabilidad sin fantasmas largos
+          raytrace_max_range: 4.0         # diagnonal de 5×5m ≈ 3.5m → 4.0 con margen
           raytrace_min_range: 0.12
-          obstacle_max_range: 3.5       # reducido: marca obstáculos cercanos reales
+          obstacle_max_range: 3.5         # consistente con ventana de 5m (radio 2.5m + margen)
           obstacle_min_range: 0.12
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0       # caída rápida → banda costosa estrecha, robot pasa cerca
-        inflation_radius: 0.45         # justo sobre radio inscrito Husky (~0.44m)
+        cost_scaling_factor: 3.5
+        # 0.50m: radio circunscrito Husky ~0.61m; con 0.50 de inflación pasillo mínimo=
+        # robot_width(0.67) + 2×0.50 = 1.67m. Con 0.65 era 1.97m → bloqueaba pasillos.
+        # Global queda en 0.65 (más conservador) → NavFn planifica lejos de paredes,
+        # DWB ejecuta con más holgura → no hay mismatch en dirección problemática.
+        inflation_radius: 0.50
       always_send_full_costmap: true
 
 # ── Global Costmap ─────────────────────────────────────────────────────────────
@@ -238,8 +279,8 @@ global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: true
-      update_frequency: 2.0
-      publish_frequency: 1.0
+      update_frequency: 5.0
+      publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_link
       resolution: 0.05
@@ -251,21 +292,42 @@ global_costmap:
       track_unknown_space: true
       footprint: "[[0.50, 0.34],[0.50, -0.34],[-0.50, -0.34],[-0.50, 0.34]]"
       footprint_padding: 0.02
-      # SIN obstacle_layer en el global_costmap: el planner usa SOLO el mapa
-      # guardado por SLAM (static_layer). El LiDAR ve la rampa norte como
-      # pared (entra en el slice 0.55-0.85m del laserscan cuando se aproxima)
-      # y eso bloqueaba la trayectoria global. El obstacle_layer sigue activo
-      # en el LOCAL costmap → si aparece un obstáculo nuevo, el controller lo
-      # esquiva localmente. Para detectar obstáculos no mapeados, re-mapea con
-      # slam.launch.py y guarda el mapa de nuevo.
-      plugins: ["static_layer", "inflation_layer"]
+      # El mapa guardado sigue viniendo de static_layer. La obstacle_layer es
+      # una capa temporal del costmap para que el planner pueda replantear si
+      # aparece una persona/carretilla bloqueando el path. No escribe ni cambia
+      # el mapa .pgm/.yaml.
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        # Misma fuente que el local: /obstacle_points (obstacle_cloud_filter), que
+        # ya elimina el suelo/rampa por celda y conserva objetos bajos y paredes.
+        # Así el global puede replantear ante obstáculos nuevos sin marcar la rampa.
+        observation_sources: obstacles
+        footprint_clearing_enabled: true
+        obstacles:
+          topic: /obstacle_points
+          max_obstacle_height: 2.5
+          min_obstacle_height: -1.0     # suelo ya eliminado por obstacle_cloud_filter
+          clearing: true
+          marking: true
+          data_type: "PointCloud2"
+          expected_update_rate: 0.5        # warn si no hay datos en 0.5s (≈5 scans VLP-16)
+          observation_persistence: 0.30
+          raytrace_max_range: 6.0
+          raytrace_min_range: 0.12
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.12
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0       # caída rápida → banda costosa estrecha, robot pasa cerca
-        inflation_radius: 0.45         # justo sobre radio inscrito Husky (~0.44m)
+        # Antes 5.0/0.45: radius < radio circunscrito Husky (0.60m) → NavFn trazaba
+        # el path rozando el obstáculo en vez de rodearlo (parecía "no replanifica").
+        # Alineado con el local (0.65/3.0): banda de coste ancha → rodeo global real.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.65         # ≥ radio circunscrito (0.60m) → holgura segura
       always_send_full_costmap: true
 
 # NOTA: lifecycle_manager_navigation NO se define aquí porque navigation_launch.py

@@ -42,7 +42,7 @@ waypoints:
 
   ramp_top:
     description: "Cima de la rampa — punto de entrada al tubo"
-    x: 0.160
+    x: 0.245
     y: 6.901
     yaw: 1.5708
     via_points: []

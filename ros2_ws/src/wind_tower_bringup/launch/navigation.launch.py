@@ -84,6 +84,16 @@ def generate_launch_description():
     nav2_params   = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
     slam_params   = os.path.join(pkg_bringup, 'config', 'slam_params.yaml')
     nav2_rviz_cfg = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
+    nav_to_pose_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_to_pose_w_replanning_and_recovery.xml',
+    )
+    nav_through_poses_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_through_poses_w_replanning_and_recovery.xml',
+    )
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
@@ -205,7 +215,14 @@ def generate_launch_description():
                 executable='bt_navigator',
                 name='bt_navigator',
                 output='screen',
-                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                parameters=[
+                    nav2_params,
+                    {
+                        'use_sim_time': use_sim_time,
+                        'default_nav_to_pose_bt_xml': nav_to_pose_bt,
+                        'default_nav_through_poses_bt_xml': nav_through_poses_bt,
+                    },
+                ],
                 remappings=remappings_tf,
             ),
             Node(

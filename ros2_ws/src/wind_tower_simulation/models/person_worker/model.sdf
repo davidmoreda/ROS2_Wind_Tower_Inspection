@@ -1,0 +1,84 @@
+<?xml version="1.0" ?>
+<!--
+  person_worker — industrial worker with human mesh + LiDAR-visible collision capsule.
+
+  Visual: MaleVisitorOnPhone mesh (Z range 0.0 to ~1.74 m → already at ground level).
+  Collision: cylinder (h=1.5 m, r=0.25 m) centred at z=0.85 m — invisible to camera,
+             visible to LiDAR because it IS a collision geometry. The VLP-16 raycasts
+             against all <collision> shapes; no visual needed for LiDAR returns.
+
+  The model is NOT static so the random_walk_people node can teleport it via
+  /world/wind_tower_world/set_pose. It is anchored to ground by a fixed-world joint
+  so physics doesn't tip it over; the ROS node overwrites the pose each cycle.
+-->
+<sdf version="1.7">
+  <model name="person_worker">
+    <!-- NOT static: SetEntityPose service can only move non-static models -->
+    <static>false</static>
+
+    <link name="body">
+      <!-- Inertia: represents a standing human ~75 kg -->
+      <inertial>
+        <mass>75.0</mass>
+        <inertia>
+          <ixx>15.0</ixx><ixy>0</ixy><ixz>0</ixz>
+          <iyy>15.0</iyy><iyz>0</iyz>
+          <izz>2.5</izz>
+        </inertia>
+        <pose>0 0 0.85 0 0 0</pose>
+      </inertial>
+
+      <!-- ── Human mesh visual ─────────────────────────────────── -->
+      <visual name="human_mesh">
+        <geometry>
+          <mesh>
+            <uri>model://person_worker/meshes/MaleVisitorStatic.obj</uri>
+            <!-- Model is already in metres; no scale needed -->
+          </mesh>
+        </geometry>
+        <cast_shadows>true</cast_shadows>
+      </visual>
+
+      <!-- ── Invisible collision capsule for LiDAR detection ───── -->
+      <!-- Cylinder torso (main body, robot-height LiDAR plane) -->
+      <collision name="col_torso">
+        <pose>0 0 0.75 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.25</radius>
+            <length>1.30</length>
+          </cylinder>
+        </geometry>
+        <surface>
+          <contact>
+            <!-- Prevent sticking to other objects when teleporting -->
+            <collide_bitmask>0x01</collide_bitmask>
+          </contact>
+          <friction>
+            <ode><mu>0.0</mu><mu2>0.0</mu2></ode>
+          </friction>
+        </surface>
+      </collision>
+
+      <!-- Head sphere (top of capsule) -->
+      <collision name="col_head">
+        <pose>0 0 1.55 0 0 0</pose>
+        <geometry>
+          <sphere><radius>0.14</radius></sphere>
+        </geometry>
+        <surface>
+          <contact><collide_bitmask>0x01</collide_bitmask></contact>
+          <friction><ode><mu>0.0</mu><mu2>0.0</mu2></ode></friction>
+        </surface>
+      </collision>
+    </link>
+
+    <!-- Fixed joint to world: prevents ODE tipping the model over.
+         The ROS random-walk node repositions the MODEL pose (not the link)
+         via SetEntityPose, which works on the model frame regardless of this joint. -->
+    <joint name="world_fixed" type="fixed">
+      <parent>world</parent>
+      <child>body</child>
+    </joint>
+  </model>
+</sdf>

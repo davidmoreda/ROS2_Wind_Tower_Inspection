@@ -90,6 +90,16 @@ def generate_launch_description():
     nav2_params  = os.path.join(pkg_bringup, 'config', 'nav2_params.yaml')
     amcl_params  = os.path.join(pkg_bringup, 'config', 'amcl_params.yaml')
     nav2_rviz    = os.path.join(pkg_bringup, 'config', 'navigation.rviz')
+    nav_to_pose_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_to_pose_w_replanning_and_recovery.xml',
+    )
+    nav_through_poses_bt = os.path.join(
+        pkg_bringup,
+        'behavior_trees',
+        'navigate_through_poses_w_replanning_and_recovery.xml',
+    )
 
     remappings_tf = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
 
@@ -134,6 +144,35 @@ def generate_launch_description():
                 name='scan_qos_bridge',
                 output='screen',
                 parameters=[{'use_sim_time': use_sim_time}],
+            ),
+            # Filtro de suelo consciente de pendiente: /velodyne_points →
+            # /obstacle_points (solo lo que sobresale del suelo de cada celda).
+            # Quita la rampa (la trata como suelo) pero conserva objetos bajos y
+            # paredes. Lo consume el obstacle_layer de los costmaps en 360°.
+            Node(
+                package='wind_tower_bringup',
+                executable='obstacle_cloud_filter',
+                name='obstacle_cloud_filter',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'input_topic': '/velodyne_points',
+                    'output_topic': '/obstacle_points',
+                    'cell_size': 0.20,
+                    'ground_threshold': 0.12,
+                    'min_range': 0.4,
+                    'max_range': 10.0,
+                    'max_obstacle_height': 2.0,
+                    # Recinto del tubo (dentro de las barreras x=±5): descarta
+                    # los ~80 defectos esféricos + superficie del tubo del
+                    # costmap. Las barreras quedan fuera → siguen marcándose.
+                    'exclude_zone_enabled': True,
+                    'exclude_frame': 'map',
+                    'exclude_xmin': -4.6,
+                    'exclude_xmax': 4.6,
+                    'exclude_ymin': -14.0,
+                    'exclude_ymax': 14.0,
+                }],
             ),
         ],
     )
@@ -230,7 +269,14 @@ def generate_launch_description():
                 executable='bt_navigator',
                 name='bt_navigator',
                 output='screen',
-                parameters=[nav2_params, {'use_sim_time': use_sim_time}],
+                parameters=[
+                    nav2_params,
+                    {
+                        'use_sim_time': use_sim_time,
+                        'default_nav_to_pose_bt_xml': nav_to_pose_bt,
+                        'default_nav_through_poses_bt_xml': nav_through_poses_bt,
+                    },
+                ],
                 remappings=remappings_tf,
             ),
             Node(
@@ -293,6 +339,7 @@ def generate_launch_description():
         output='screen',
         condition=IfCondition(use_rviz),
     )
+
 
     # ── Behaviour nodes (mission controller + voice) ───────────────────────
     # Se lanzan 35 s después para que Nav2 lifecycle esté activo antes de que

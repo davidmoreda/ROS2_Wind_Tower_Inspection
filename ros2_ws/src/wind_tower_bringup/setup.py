@@ -27,6 +27,10 @@ setup(
             'config/slam.rviz',
             'config/navigation.rviz',
         ]),
+        ('share/' + package_name + '/behavior_trees', [
+            'behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml',
+            'behavior_trees/navigate_through_poses_w_replanning_and_recovery.xml',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -46,6 +50,7 @@ setup(
             'tf_static_relay = wind_tower_bringup.tf_static_relay:main',
             'turner_node = wind_tower_bringup.turner_node:main',
             'scan_qos_bridge = wind_tower_bringup.scan_qos_bridge:main',
+            'obstacle_cloud_filter = wind_tower_bringup.obstacle_cloud_filter:main',
             'mission_navigator = wind_tower_bringup.mission_navigator:main',
         ],
     },
