@@ -12,10 +12,17 @@
 \institute[Loyola]{Universidad Loyola Andalucia \\ Master en Inteligencia Artificial \\ Robotica Inteligente}
 \date{[Fecha de la presentacion]}
 
-% Logo en portada y esquina (subir a figures/logo_loyola.png).
-% Si no existe el archivo, comenta estas dos lineas.
-\titlegraphic{\includegraphics[height=1.5cm]{figures/logo_loyola.png}}
-\logo{\includegraphics[height=0.8cm]{figures/logo_loyola.png}}
+% Logo en portada y esquina.
+\IfFileExists{UL_LogotipoPrincipal_NEG_1T.png}{%
+  \titlegraphic{\logopastilla{1.05cm}}%
+  \logo{}%
+}{\IfFileExists{figures/logo_loyola.png}{%
+  \titlegraphic{\includegraphics[height=1.25cm]{figures/logo_loyola.png}}%
+  \logo{}%
+}{%
+  \titlegraphic{}%
+  \logo{}%
+}}
 
 \begin{document}
 
@@ -31,7 +38,23 @@
 % 2. INDICE
 % ───────────────────────────────────────────────────────────────────────────
 \begin{frame}{Indice}
-  \tableofcontents[hideallsubsections]
+  \toprightlogo
+  \vfill
+  \begin{center}
+    \begin{minipage}{0.86\textwidth}
+      \begin{columns}[t,onlytextwidth]
+        \begin{column}{0.47\textwidth}
+          \footnotesize
+          \tableofcontents[hideallsubsections,sections={1-5}]
+        \end{column}
+        \begin{column}{0.47\textwidth}
+          \footnotesize
+          \tableofcontents[hideallsubsections,sections={6-10}]
+        \end{column}
+      \end{columns}
+    \end{minipage}
+  \end{center}
+  \vfill
 \end{frame}
 
 % ───────────────────────────────────────────────────────────────────────────
@@ -120,10 +143,10 @@
 \begin{frame}{Tuning del controller: rampa de 13°}
   % TODO P2: contar la historia del tuning (rampa, anti-bandazos, slip).
   \begin{block}{Hipotesis 1 (descartada)}
-    \emph{"Mas velocidad y aceleracion para vencer la pendiente."} El Husky patinaba en los giros, AMCL perdia coherencia.
+    \emph{``Mas velocidad y aceleracion para vencer la pendiente.''} El Husky patinaba en los giros, AMCL perdia coherencia.
   \end{block}
   \begin{block}{Hipotesis 2 (actual)}
-    \emph{"Aceleraciones suaves para no perder traccion."}
+    \emph{``Aceleraciones suaves para no perder traccion.''}
   \end{block}
   \scriptsize
   \begin{tabular}{lrr}
@@ -195,7 +218,7 @@
       \begin{itemize}
         \item \highlight{BT de inspeccion}: secuencia \emph{navegar $\to$ entrar al tubo $\to$ desplegar brazo $\to$ inspeccionar $\to$ generar informe}.
         \item \highlight{Voz con Whisper}: el operador da ordenes en lenguaje natural.
-        \item \highlight{LangChain}: traduce comandos como \emph{"inspecciona la torre"} a acciones del BT.
+        \item \highlight{LangChain}: traduce comandos como \emph{``inspecciona la torre''} a acciones del BT.
         \item \texttt{mission\_controller}: orquesta NAV2, MoveIt y percepcion en una unica mision.
       \end{itemize}
     \end{column}
@@ -224,45 +247,10 @@
   \end{center}
 \end{frame}
 
-\begin{frame}{Demo: estructura del video}
-  % TODO: tabla con la timeline del video.
-  \scriptsize
-  \begin{tabular}{lll}
-    \toprule
-    Tiempo & Que se ve & Narra \\
-    \midrule
-    0:00 - 0:30 & Lanzamiento Gazebo + spawn Husky                         & P1 \\
-    0:30 - 1:00 & Comando por voz \emph{"inspecciona la torre"}            & P3 \\
-    1:00 - 2:00 & Husky navega autonomamente hacia la torre (Nav2 + AMCL)   & P2 \\
-    2:00 - 3:00 & Entrada al tubo, despliegue del brazo, inspeccion        & P3 \\
-    3:00 - 4:00 & Deteccion YOLO + mapa cilindrico de defectos              & P3 \\
-    4:00 - 4:30 & Informe final generado y mision completada                 & P1 \\
-    \bottomrule
-  \end{tabular}
-\end{frame}
-
 % ───────────────────────────────────────────────────────────────────────────
 % 12. RESULTADOS  [P2]
 % ───────────────────────────────────────────────────────────────────────────
-\section{Resultados}
 
-\begin{frame}{Metricas cuantitativas}
-  % TODO P2: rellenar tras las pruebas.
-  \scriptsize
-  \begin{tabular}{lXc}
-    \toprule
-    Metrica & Definicion & Valor \\
-    \midrule
-    Tiempo SLAM completo            & Recorrido del mundo                 & [pendiente] \\
-    Convergencia AMCL               & Desde "2D Pose Estimate"            & [pendiente] \\
-    RMSE trayectoria                & AMCL vs ground truth                & [pendiente] \\
-    Tasa de replanificacion         & Eventos/min con obstaculo dinamico  & [pendiente] \\
-    Aborts del BT en rampa          & Antes vs despues del tuning         & [pendiente] \\
-    Tiempo mision completa          & Inspeccion end-to-end               & [pendiente] \\
-    Defectos detectados (precision) & YOLO @ IoU 0.5                       & [pendiente] \\
-    \bottomrule
-  \end{tabular}
-\end{frame}
 
 % ───────────────────────────────────────────────────────────────────────────
 % 13. CONCLUSIONES  [P1]
@@ -295,7 +283,7 @@
 \begin{frame}[plain]
   \begin{center}
     \vspace{1.5cm}
-    {\Huge \textcolor{loyolaGranate}{\textbf{?Preguntas?}}}
+    {\Huge \textcolor{loyolaAzulOscuro}{\textbf{¿Preguntas?}}}
     \vspace{1cm}
 
     {\large Gracias por vuestra atencion}
@@ -303,7 +291,6 @@
     \vspace{1.5cm}
     \small
     \faIcon{github}~~\texttt{github.com/davidmoreda/ROS2\_Wind\_Tower\_Inspection} \\
-    \faIcon{envelope}~~[email del equipo]
   \end{center}
 \end{frame}}
 

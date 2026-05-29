@@ -37,11 +37,10 @@ sudo apt install texlive-latex-recommended texlive-latex-extra \
 
 ```
 docs/presentacion/
-|-- presentacion.tex     # documento principal Beamer (~14 slides)
+|-- presentacion.tex     # documento principal Beamer (~15 slides)
 |-- preamble.tex         # tema custom Loyola + paquetes
 |-- Makefile             # latexmk wrapper (incluye target handout)
 |-- README.md            # este archivo
-|-- video_plan.md        # guion del video de demo (~4-5 min)
 |-- figures/             # logo, capturas de cada bloque, diagrama arquitectura
 `-- video/               # mp4 de la demo (gitignored)
 ```
@@ -61,25 +60,38 @@ make clean       # limpia artefactos
 
 Tema: rojo granate Loyola (`#9F1D35`) con grises de soporte. Ratio 16:9.
 
+**Duracion total objetivo: 15 minutos** (presentacion en clase con video de demo embebido).
+
 | # | Slide                                  | Duracion | Narra | Recursos visuales |
 | - | -------------------------------------- | -------- | ----- | ----------------- |
-| 1 | Portada                                | 0:30     | P1    | logo_loyola |
-| 2 | Indice                                 | 0:30     | P1    | -- |
-| 3 | Contexto y objetivo                    | 1:00     | P1    | contexto_torre.png |
-| 4 | Arquitectura general                   | 1:00     | P1    | arquitectura.png |
-| 5 | Plataforma robotica + simulacion       | 1:00     | P2    | robot_gazebo.png |
-| 6 | NAV2: SLAM + EKF + AMCL                | 1:30     | P2    | nav2_rviz.png |
+| 1 | Portada                                | 0:15     | P1    | logo_loyola |
+| 2 | Indice                                 | 0:15     | P1    | -- |
+| 3 | Contexto y objetivo                    | 0:45     | P1    | contexto_torre.png |
+| 4 | Arquitectura general                   | 0:45     | P1    | arquitectura.png |
+| 5 | Plataforma robotica + simulacion       | 0:45     | P2    | robot_gazebo.png |
+| 6 | NAV2: SLAM + EKF + AMCL                | 1:00     | P2    | nav2_rviz.png |
 | 7 | Tuning del controller (rampa)          | 1:00     | P2    | tabla embebida |
-| 8 | MoveIt 2 sobre el UR5e                 | 1:00     | P3    | moveit_rviz.png |
-| 9 | Percepcion YOLO + dataset sintetico    | 1:00     | P3    | yolo_detection.png |
-| 10 | BT + voz + mission controller         | 1:00     | P3    | bt_voice.png |
-| 11 | Demo (video)                           | 3:00     | rota  | video/demo.mp4 + demo_thumbnail.png |
-| 12 | Demo: timeline                         | --       | --    | tabla embebida |
-| 13 | Metricas cuantitativas                 | 1:00     | P2    | tabla |
+| 8 | MoveIt 2 sobre el UR5e                 | 0:45     | P3    | moveit_rviz.png |
+| 9 | Percepcion YOLO + dataset sintetico    | 0:45     | P3    | yolo_detection.png |
+| 10 | BT + voz + mission controller         | 0:45     | P3    | bt_voice.png |
+| 11 | Demo (video)                           | 3:45     | rota  | video/demo.mp4 |
+| 12 | Demo: timeline                         | 0:30     | P1    | tabla embebida |
+| 13 | Metricas cuantitativas                 | 0:45     | P2    | tabla |
 | 14 | Conclusiones y trabajo futuro          | 0:30     | P1    | -- |
 | 15 | Preguntas                              | --       | --    | -- |
 
-**Total**: ~13 min de exposicion + buffer para preguntas = ~15 min.
+**Reparto temporal**:
+- Oral (slides 1-10, 12-14): **~7:55**
+- Video de demo (slide 11): **~3:45**
+- Buffer / transiciones: **~3:20** para preguntas y margen
+
+**Total con buffer**: **15:00**.
+
+### Avisos de timing
+
+- Cada bloque tematico va a 45-60 segundos: hay que practicar para no excederse.
+- El video es el unico modulo "fijo". Si necesitais recuperar tiempo, recortar el video antes que las explicaciones orales.
+- Ensayar con cronometro. Si en la primera pasada salen 18 min, hay que reducir la narracion de las slides 6-10 (las tecnicas), no la introduccion ni la demo.
 
 ## Reparto del equipo
 
@@ -88,13 +100,13 @@ Tema: rojo granate Loyola (`#9F1D35`) con grises de soporte. Ratio 16:9.
 | **P1**  | Portada, Indice, Contexto, Arquitectura, Conclusiones                   | `contexto_torre.png`, `arquitectura.png` |
 | **P2**  | Plataforma, NAV2 (2 slides), Metricas                                   | `robot_gazebo.png`, `nav2_rviz.png` |
 | **P3**  | MoveIt, YOLO, BT+voz                                                    | `moveit_rviz.png`, `yolo_detection.png`, `bt_voice.png` |
-| **Todos** | Narran la demo por bloques (segun timeline en `video_plan.md`)       | `demo_thumbnail.png` + `video/demo.mp4` |
+| **Todos** | Narran la demo por bloques (~3:45 segun la timeline de la slide 12)  | `demo_thumbnail.png` + `video/demo.mp4` |
 
 ## Que falta para terminar
 
 1. **Subir el logo** a `figures/logo_loyola.png`. Si no esta, comentar las lineas `\titlegraphic` y `\logo` en `presentacion.tex`.
 2. **Crear el diagrama de arquitectura** (`figures/arquitectura.png`). Se puede hacer en draw.io o aprovechar diagramas existentes.
 3. **Recoger capturas** del resto de bloques. Se pueden reutilizar capturas de las memorias de Practica 1/2/3 que ya teneis pensadas.
-4. **Grabar la demo** segun el guion de `video_plan.md` (4-5 min).
+4. **Grabar la demo** (~3:45 min) que muestre la mision completa: activacion por voz, navegacion al tubo, despliegue del brazo, deteccion YOLO y generacion del informe.
 5. **Rellenar TODOs** de narracion en `presentacion.tex` para tener notas de speaker.
 6. **Compilar** y **ensayar tiempos**.
