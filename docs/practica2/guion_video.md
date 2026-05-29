@@ -17,12 +17,8 @@ en el video NO se lanzan comandos en directo. Cada bloque indica **a donde enfoc
 
 **ENFOCAR: la ventana de Gazebo con el mundo cargado (plano de fondo durante la intro).**
 
-> "Hola, somos [Nombre1], [Nombre2] y [Nombre3]. En este video presentamos la Practica 2:
-> navegacion autonoma con NAV2 sobre ROS 2 Humble. El robot es el Husky A200 de Clearpath,
-> el mismo de la Practica 1. Una aclaracion de alcance: este proyecto forma parte de un Trabajo
-> de Fin de Master de inspeccion de torres eolicas, asi que en la rama hay tambien codigo de
-> otras partes, el brazo, la percepcion y el comportamiento. En este video hablamos unicamente
-> de la navegacion: SLAM, fusion de sensores, localizacion, costmaps, el controlador y una mision
+> "Buenas, vamos a continuar ahora con la Practica 2. El robot es el mismo de la Practica 1.
+> En este video hablamos de la navegacion: SLAM, fusion de sensores, localizacion, costmaps, el controlador y una mision
 > de waypoints."
 
 ---
@@ -33,7 +29,7 @@ en el video NO se lanzan comandos en directo. Cada bloque indica **a donde enfoc
 
 > "Esta es la arquitectura del stack, organizada en cuatro capas. La primera es Gazebo, que
 > simula el robot y publica los sensores. La segunda es la fusion de odometria, que combina la IMU
-> y la odometria de las ruedas con un filtro de Kalman extendido en dos dimensiones. La tercera es
+> y la odometria de lass ruedas con un filtro de Kalman extendido en dos dimensiones. La tercera es
 > la localizacion: AMCL situa al robot sobre un mapa que hemos generado con SLAM Toolbox. Y la
 > cuarta es NAV2, que ejecuta el planificador, el controlador y un arbol de comportamiento. Todo se
 > arranca y se coordina con un gestor de ciclo de vida."
