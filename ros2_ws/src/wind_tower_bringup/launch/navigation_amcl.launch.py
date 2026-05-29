@@ -145,6 +145,26 @@ def generate_launch_description():
                 output='screen',
                 parameters=[{'use_sim_time': use_sim_time}],
             ),
+            # Filtro de suelo consciente de pendiente: /velodyne_points →
+            # /obstacle_points (solo lo que sobresale del suelo de cada celda).
+            # Quita la rampa (la trata como suelo) pero conserva objetos bajos y
+            # paredes. Lo consume el obstacle_layer de los costmaps en 360°.
+            Node(
+                package='wind_tower_bringup',
+                executable='obstacle_cloud_filter',
+                name='obstacle_cloud_filter',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'input_topic': '/velodyne_points',
+                    'output_topic': '/obstacle_points',
+                    'cell_size': 0.20,
+                    'ground_threshold': 0.12,
+                    'min_range': 0.4,
+                    'max_range': 10.0,
+                    'max_obstacle_height': 2.0,
+                }],
+            ),
         ],
     )
 

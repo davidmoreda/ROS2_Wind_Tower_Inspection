@@ -243,12 +243,18 @@ local_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: cloud
+        # Fuente: /obstacle_points, salida del nodo obstacle_cloud_filter. Ese nodo
+        # ya hace ground-removal consciente de pendiente (resta el suelo local por
+        # celda), así que la rampa de 13° NO llega aquí pero los objetos bajos y las
+        # paredes SÍ. Es nube 3D filtrada en 360° (mejor que el slice /scan, que se
+        # dejaba los objetos por debajo de 0.55 m). El min/max_obstacle_height de
+        # abajo va permisivo porque el filtrado de altura ya está hecho upstream.
+        observation_sources: obstacles
         footprint_clearing_enabled: true
-        cloud:
-          topic: /velodyne_points
-          max_obstacle_height: 2.0
-          min_obstacle_height: 0.20
+        obstacles:
+          topic: /obstacle_points
+          max_obstacle_height: 2.5
+          min_obstacle_height: -1.0     # suelo ya eliminado por obstacle_cloud_filter
           clearing: true
           marking: true
           data_type: "PointCloud2"
@@ -293,12 +299,15 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: cloud
+        # Misma fuente que el local: /obstacle_points (obstacle_cloud_filter), que
+        # ya elimina el suelo/rampa por celda y conserva objetos bajos y paredes.
+        # Así el global puede replantear ante obstáculos nuevos sin marcar la rampa.
+        observation_sources: obstacles
         footprint_clearing_enabled: true
-        cloud:
-          topic: /velodyne_points
-          max_obstacle_height: 2.0
-          min_obstacle_height: 0.20
+        obstacles:
+          topic: /obstacle_points
+          max_obstacle_height: 2.5
+          min_obstacle_height: -1.0     # suelo ya eliminado por obstacle_cloud_filter
           clearing: true
           marking: true
           data_type: "PointCloud2"

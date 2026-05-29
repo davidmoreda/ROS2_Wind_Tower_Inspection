@@ -119,7 +119,7 @@ Visualization Manager:
         Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /robot_description
+        Value: /robot/robot_description
       Enabled: true
       Links:
         All Links Enabled: true
