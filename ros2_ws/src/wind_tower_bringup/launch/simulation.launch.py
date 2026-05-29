@@ -137,9 +137,11 @@ def generate_launch_description():
         arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
     )
 
-    # Bridge SetEntityPose service: permite al nodo random_walk_people
-    # mover los modelos de personas usando /world/<world>/set_pose.
-    # UserCommands system ya está cargado en el mundo SDF.
+    # Bridge SetEntityPose (servicio) + dynamic_pose/info (topic):
+    #  • set_pose: el nodo people_collision_sync mueve las cápsulas person_col_N.
+    #  • dynamic_pose/info → tf2_msgs/TFMessage: poses en vivo de los <actor>
+    #    animados (cada child_frame_id = actor_N) que el nodo sigue con las cápsulas.
+    # UserCommands + SceneBroadcaster ya están cargados en el mundo SDF.
     set_pose_bridge = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -148,30 +150,33 @@ def generate_launch_description():
         arguments=[
             '/world/wind_tower_world/set_pose'
             '@ros_gz_interfaces/srv/SetEntityPose',
+            '/world/wind_tower_world/dynamic_pose/info'
+            '@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
         ],
     )
 
-    # Nodo de movimiento aleatorio de personas.
+    # Nodo de sincronización personas-colisión.
+    # Los <actor> caminan (piernas animadas) por <trajectory> nativa; este nodo
+    # mueve una cápsula de colisión invisible (person_col_N) sobre cada actor_N
+    # para que el LiDAR VLP-16 / Nav2 los detecten. Sustituye a random_walk_people
+    # (que teletransportaba mallas estáticas vía gz-service y causaba parpadeo).
     # Delay de 15 s para que Gazebo cargue todos los modelos antes del primer tick.
-    # use_gz_service=false → el nodo intenta primero el servicio ROS bridgeado y
-    # cae automáticamente a `gz service` subprocess si el bridge no está listo.
-    # Para forzar siempre gz service (más fiable en WSL2), poner use_gz_service=true.
-    random_walk_node = TimerAction(
+    people_sync_node = TimerAction(
         period=15.0,
         actions=[
             Node(
                 package='wind_tower_inspection_behaviour',
-                executable='random_walk_people',
-                name='random_walk_people',
+                executable='people_collision_sync',
+                name='people_collision_sync',
                 output='screen',
                 parameters=[{
                     'use_sim_time': True,
                     'world_name': 'wind_tower_world',
-                    'worker_names': 'worker_1,worker_2,worker_3,worker_4',
-                    'speed': 0.8,
-                    'tick_rate': 10.0,
-                    'waypoint_timeout': 30.0,
-                    'use_gz_service': False,
+                    'num_people': 12,
+                    'actor_prefix': 'actor_',
+                    'capsule_prefix': 'person_col_',
+                    'update_rate': 15.0,
+                    'capsule_z': 0.0,
                 }],
             ),
         ],
@@ -262,6 +267,8 @@ def generate_launch_description():
             ('/robot/sensors/inspection_camera/image',
              '/inspection/camera/image_raw'),
         ],
+        respawn=True,
+        respawn_delay=5.0,
     )
 
     inspection_camera_info_bridge = Node(
@@ -279,7 +286,7 @@ def generate_launch_description():
         ],
     )
     camera_bridges = TimerAction(
-        period=8.0,
+        period=15.0,
         actions=[
             inspection_image_bridge,
             inspection_camera_info_bridge,
@@ -391,5 +398,5 @@ def generate_launch_description():
         robot_spawn,
         ekf_param_override,
         inspection_teleop_limits,
-        random_walk_node,
+        people_sync_node,
     ])

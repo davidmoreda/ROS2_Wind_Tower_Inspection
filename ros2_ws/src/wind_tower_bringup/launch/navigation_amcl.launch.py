@@ -163,6 +163,15 @@ def generate_launch_description():
                     'min_range': 0.4,
                     'max_range': 10.0,
                     'max_obstacle_height': 2.0,
+                    # Recinto del tubo (dentro de las barreras x=±5): descarta
+                    # los ~80 defectos esféricos + superficie del tubo del
+                    # costmap. Las barreras quedan fuera → siguen marcándose.
+                    'exclude_zone_enabled': True,
+                    'exclude_frame': 'map',
+                    'exclude_xmin': -4.6,
+                    'exclude_xmax': 4.6,
+                    'exclude_ymin': -14.0,
+                    'exclude_ymax': 14.0,
                 }],
             ),
         ],
@@ -331,41 +340,6 @@ def generate_launch_description():
         condition=IfCondition(use_rviz),
     )
 
-    # ── Cámara de inspección — bridges desde Gazebo ───────────────────────────
-    # Usamos nombres distintos (_nav) para coexistir con simulation.launch.py
-    # sin que ROS 2 mate uno de los dos nodos duplicados.
-    camera_bridge = Node(
-        package='ros_gz_image',
-        executable='image_bridge',
-        name='inspection_image_bridge_nav',
-        output='screen',
-        arguments=['/robot/sensors/inspection_camera/image'],
-        remappings=[
-            ('/robot/sensors/inspection_camera/image',
-             '/inspection/camera/image_raw'),
-        ],
-    )
-    camera_info_bridge = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        name='inspection_camera_info_bridge_nav',
-        output='screen',
-        arguments=[
-            '/robot/sensors/inspection_camera/image/camera_info'
-            '@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo',
-        ],
-        remappings=[
-            ('/robot/sensors/inspection_camera/image/camera_info',
-             '/inspection/camera/camera_info'),
-        ],
-    )
-    camera_bridges = TimerAction(
-        period=5.0,
-        actions=[
-            camera_bridge,
-            camera_info_bridge,
-        ],
-    )
 
     # ── Behaviour nodes (mission controller + voice) ───────────────────────
     # Se lanzan 35 s después para que Nav2 lifecycle esté activo antes de que
@@ -397,7 +371,6 @@ def generate_launch_description():
         declare_map,
         dualsense_joy,
         ps5_teleop,
-        camera_bridges,
         perception,
         localization,
         navigation_nodes,

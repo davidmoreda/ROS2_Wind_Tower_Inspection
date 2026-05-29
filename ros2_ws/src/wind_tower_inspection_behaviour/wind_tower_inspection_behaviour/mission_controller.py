@@ -271,10 +271,14 @@ class MissionController(Node):
         self._camera_frame_lock = threading.Lock()
         self._camera_jpeg: Optional[bytes] = None
         from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+        # Los bridges de sensores (ros_gz_image image_bridge y el parameter_bridge
+        # del LiDAR) publican con perfil sensor_data = BEST_EFFORT. Un subscriber
+        # RELIABLE es INCOMPATIBLE con ese publisher y no recibe ningún mensaje,
+        # por eso la cámara web se quedaba en "Sin señal". Igualamos a BEST_EFFORT.
         _cam_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=10,
         )
         self.create_subscription(
             Image,
@@ -379,22 +383,29 @@ class MissionController(Node):
             self._ensure_cv2_path()
             import cv2
             import numpy as np
-            # Soporta encoding bgr8, rgb8 y bgra8 habituales en Gazebo
+            if msg.height == 0 or msg.width == 0 or not msg.data:
+                return
             enc = msg.encoding.lower()
-            channels = len(msg.data) // (msg.height * msg.width) if msg.height and msg.width else 3
-            raw = np.frombuffer(msg.data, dtype=np.uint8).reshape(
-                msg.height, msg.width, channels
-            )
+            # Bytes por píxel según encoding declarado (Gazebo suele publicar rgb8)
+            bpp = {'rgb8': 3, 'bgr8': 3, 'bgra8': 4, 'rgba8': 4, 'mono8': 1}.get(enc, 3)
+            data = bytes(msg.data)
+            arr = np.frombuffer(data, dtype=np.uint8)
+            # msg.step puede incluir padding por fila; se maneja antes de reshape
+            if msg.step >= msg.width * bpp and len(arr) == msg.step * msg.height:
+                raw = arr.reshape(msg.height, msg.step)[:, :msg.width * bpp].reshape(
+                    msg.height, msg.width, bpp)
+            else:
+                raw = arr.reshape(msg.height, msg.width, bpp)
             if enc in ('rgb8', 'rgb'):
                 frame = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
-            elif enc in ('bgra8',):
+            elif enc == 'bgra8':
                 frame = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
-            elif enc in ('rgba8',):
+            elif enc == 'rgba8':
                 frame = cv2.cvtColor(raw, cv2.COLOR_RGBA2BGR)
-            elif enc in ('mono8',):
+            elif enc == 'mono8':
                 frame = cv2.cvtColor(raw, cv2.COLOR_GRAY2BGR)
             else:
-                frame = raw  # ya es BGR
+                frame = raw  # bgr8
             _, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             with self._camera_frame_lock:
                 self._camera_jpeg = buf.tobytes()
@@ -2521,7 +2532,8 @@ import URDFLoader from 'https://cdn.jsdelivr.net/npm/urdf-loader@0.12.1/src/URDF
           }
         };
         const robot = loader.parse(urdfText);
-        robot.rotation.x = -Math.PI / 2; // Roll -90 deg: URDF upright vs point cloud frame
+        robot.rotation.x = Math.PI / 2;  // Roll +90 deg: URDF upright vs point cloud frame
+        robot.rotation.y = Math.PI;      // +180° yaw
         robot.rotation.z = Math.PI;      // ROS → Three.js frame
         scene.add(robot);
         urdfRobot = robot;
@@ -2982,7 +2994,7 @@ def _flask_thread(node: MissionController):
     import logging
     log = logging.getLogger('werkzeug')
     log.setLevel(logging.ERROR)
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=True)
 
 
 # ── Entrypoint ─────────────────────────────────────────────────────────────────
