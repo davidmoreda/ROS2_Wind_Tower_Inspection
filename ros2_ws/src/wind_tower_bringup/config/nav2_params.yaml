@@ -74,12 +74,12 @@ controller_server:
       # Diff-drive Husky: solo vx y wz. Sin marcha atrás para no meter el robot
       # hacia obstáculos que aparecen detrás durante una evasión.
       min_vel_x: 0.0
-      max_vel_x: 0.50
+      max_vel_x: 0.80
       min_vel_y: 0.0
       max_vel_y: 0.0
       max_vel_theta: 0.85
       min_speed_xy: 0.0
-      max_speed_xy: 0.50
+      max_speed_xy: 0.80
       min_speed_theta: 0.0
 
       # Mantiene la suavidad necesaria en la rampa y evita bandazos al esquivar.
@@ -194,8 +194,8 @@ velocity_smoother:
     feedback: "OPEN_LOOP"
     # Limites conservadores para rampa: menos pico de velocidad y aceleraciones
     # suaves reducen slip y evitan saltos bruscos en odometria/AMCL.
-    max_velocity: [0.60, 0.0, 0.9]
-    min_velocity: [-0.60, 0.0, -0.9]
+    max_velocity: [0.85, 0.0, 0.9]
+    min_velocity: [-0.85, 0.0, -0.9]
     max_accel: [0.75, 0.0, 0.8]    # angular: era 1.0 → reducido para suavizar w
     max_decel: [-0.75, 0.0, -0.8]  # angular: era -1.0 → simétrico
     odom_topic: /robot/platform/odom/filtered
@@ -231,7 +231,7 @@ local_costmap:
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
-      # 5×5m: suficiente para DWB (sim_time 2.0s × max_vel 0.5 = 1.0m lookahead),
+      # 5×5m: suficiente para DWB (sim_time 2.0s × max_vel 0.8 = 1.6m lookahead),
       # menor que 8×8 reduce el smearing del rolling window y la latencia de raytrace.
       width:  5
       height: 5

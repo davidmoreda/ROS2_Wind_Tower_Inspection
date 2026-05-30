@@ -172,7 +172,7 @@ def generate_launch_description():
                 parameters=[{
                     'use_sim_time': True,
                     'world_name': 'wind_tower_world',
-                    'num_people': 12,
+                    'num_people': 4,
                     'actor_prefix': 'actor_',
                     'capsule_prefix': 'person_col_',
                     'update_rate': 15.0,
